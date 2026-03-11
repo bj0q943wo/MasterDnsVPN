@@ -145,8 +145,4 @@ class DNSBalancer:
         if not actual_count:
             return []
 
-        if actual_count == 1:
-            idx = hash(stream_id) % self.valid_servers_count
-            return [self.valid_servers[idx]]
-
         return self._get_servers(actual_count)

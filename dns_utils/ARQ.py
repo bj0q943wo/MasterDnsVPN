@@ -55,7 +55,19 @@ class ARQ:
         self.closed = False
         self.close_reason = "Unknown"
         self.logger = logger or self._DummyLogger()
+
         self._fin_sent = False
+        self._fin_received = False
+        self._fin_acked = False
+        self._fin_seq_sent = None
+        self._fin_seq_received = None
+
+        self._rst_received = False
+        self._rst_sent = False
+        self._close_time = None
+
+        self._local_write_closed = False
+        self._remote_write_closed = False
 
         self.rto = rto
         self.max_rto = max_rto
@@ -99,6 +111,10 @@ class ARQ:
         _mtu = self.mtu
         _limit = self.limit
 
+        reset_required = False
+        graceful_eof = False
+        error_reason = None
+
         try:
             if self.is_socks and self.initial_data:
                 offset = 0
@@ -123,17 +139,24 @@ class ARQ:
             while not self.closed:
                 await self.window_not_full.wait()
 
+                if self._fin_received:
+                    self.close_reason = "FIN Received, No More Data to Send"
+                    break
+
                 try:
                     raw_data = await _read(_mtu)
                 except ConnectionResetError:
-                    self.close_reason = "Local App Reset Connection (Dropped)"
+                    error_reason = "Local App Reset Connection (Dropped)"
+                    reset_required = True
                     break
                 except Exception as e:
-                    self.close_reason = f"Read Error: {e}"
+                    error_reason = f"Read Error: {e}"
+                    reset_required = True
                     break
 
                 if not raw_data:
-                    self.close_reason = "Local App Closed Connection (EOF)"
+                    error_reason = "Local App Closed Connection (EOF)"
+                    graceful_eof = True
                     break
 
                 self.last_activity = _monotonic()
@@ -158,26 +181,95 @@ class ARQ:
         except Exception as e:
             self.logger.debug(f"Stream {self.stream_id} IO loop error: {e}")
         finally:
-            if not self.closed:
-                final_reason = getattr(self, "close_reason", "IO Loop Exit")
-                if final_reason == "Unknown":
-                    final_reason = "IO Loop Exit"
+            if self.closed:
+                return
 
-                if "EOF" in final_reason:
-                    asyncio.create_task(self._graceful_close(final_reason))
-                else:
-                    asyncio.create_task(self.close(reason=final_reason))
+            if reset_required:
+                await self.abort(reason=error_reason or "Local reset/error")
+                return
 
-    async def _graceful_close(self, reason):
-        """
-        Wait for unacknowledged data to be sent and ACKed before closing.
-        """
-        wait_time = 0
-        while len(self.snd_buf) > 0 and wait_time < 30.0 and not self.closed:
-            await asyncio.sleep(0.5)
-            wait_time += 0.5
+            if self._fin_received:
+                wait_deadline = time.monotonic() + 180.0
+                while (
+                    self.snd_buf
+                    and time.monotonic() < wait_deadline
+                    and not self.closed
+                ):
+                    await asyncio.sleep(0.05)
 
-        await self.close(reason=reason)
+                if self.snd_buf and not self.closed:
+                    await self.abort(
+                        reason="Remote FIN but local send buffer did not drain"
+                    )
+                    return
+
+                if not self.closed:
+                    await self._initiate_graceful_close(
+                        reason="Remote FIN fully handled"
+                    )
+                return
+
+            if graceful_eof:
+                await self._initiate_graceful_close(reason=error_reason or "Local EOF")
+
+    async def _initiate_graceful_close(self, reason="Graceful close"):
+        if self.closed:
+            return
+
+        self.close_reason = reason
+
+        deadline = time.monotonic() + 180.0
+        while self.snd_buf and time.monotonic() < deadline and not self.closed:
+            await asyncio.sleep(0.05)
+
+        if self.closed:
+            return
+
+        if self.snd_buf:
+            await self.abort(reason=f"{reason} but send buffer did not drain")
+            return
+
+        await self.close(reason=reason, send_fin=True)
+
+    async def _try_finalize_remote_eof(self):
+        if (
+            self.closed
+            or self._remote_write_closed
+            or not self._fin_received
+            or self._fin_seq_received is None
+            or self.rcv_nxt != self._fin_seq_received
+        ):
+            return
+
+        self._remote_write_closed = True
+
+        try:
+            if (
+                self.writer
+                and hasattr(self.writer, "can_write_eof")
+                and self.writer.can_write_eof()
+            ):
+                self.writer.write_eof()
+                try:
+                    await self.writer.drain()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            await self.enqueue_tx(
+                0,
+                self.stream_id,
+                self._fin_seq_received,
+                b"",
+                is_fin_ack=True,
+            )
+        except Exception:
+            pass
+
+        if self._fin_sent and self._fin_acked and not self.snd_buf:
+            await self.close(reason="Both FINs fully acknowledged")
 
     async def _retransmit_loop(self):
         """Separate lightweight task for RTO checks."""
@@ -206,7 +298,7 @@ class ARQ:
 
         diff = (sn - self.rcv_nxt) % 65536
         if diff >= 32768:
-            await self.enqueue_tx(4, self.stream_id, sn, b"", is_ack=True)
+            await self.enqueue_tx(0, self.stream_id, sn, b"", is_ack=True)
             return
 
         if diff > self.window_size:
@@ -227,7 +319,7 @@ class ARQ:
                 has_written = True
                 self.rcv_nxt = (self.rcv_nxt + 1) % 65536
             except Exception as e:
-                await self.close(reason=f"RCV Buffer Error: {e}")
+                await self.abort(reason=f"RCV Buffer Error: {e}")
                 return
 
         if has_written:
@@ -236,10 +328,12 @@ class ARQ:
                     _write(b"".join(data_to_write))
                     await self.writer.drain()
             except Exception as e:
-                await self.close(reason=f"Writer Error: {e}")
+                await self.abort(reason=f"Writer Error: {e}")
                 return
 
         await self.enqueue_tx(0, self.stream_id, sn, b"", is_ack=True)
+
+        await self._try_finalize_remote_eof()
 
     async def receive_ack(self, sn):
         self.last_activity = time.monotonic()
@@ -255,18 +349,28 @@ class ARQ:
         now = time.monotonic()
 
         if now - self.last_activity > 300.0:
-            await self.close(reason="Stream Inactivity Timeout (Dead)")
+            await self.abort(reason="Stream Inactivity Timeout (Dead)")
             return
 
         items_to_resend = []
         _append = items_to_resend.append
 
-        for sn, info in self.snd_buf.items():
+        max_retries = 20
+        for sn, info in list(self.snd_buf.items()):
+            if info["retries"] >= max_retries:
+                await self.abort(reason=f"Max retransmissions exceeded for sn={sn}")
+                return
+
             if now - info["time"] >= info["current_rto"]:
-                _append((sn, info["data"], info.get("is_socks_syn", False)))
+                items_to_resend.append(
+                    (sn, info["data"], info.get("is_socks_syn", False))
+                )
                 info["time"] = now
                 info["retries"] += 1
-                info["current_rto"] = min(self.max_rto, info["current_rto"] * 1.5)
+                dynamic_max = max(
+                    self.max_rto, 15.0 if info["retries"] > 10 else self.max_rto
+                )
+                info["current_rto"] = min(dynamic_max, info["current_rto"] * 1.5)
 
         _enqueue = self.enqueue_tx
         _sid = self.stream_id
@@ -277,17 +381,50 @@ class ARQ:
             else:
                 await _enqueue(1, _sid, sn, data, is_resend=True)
 
-    async def close(self, reason="Unknown"):
+    async def abort(self, reason="Abort"):
+        if self.closed:
+            return
+
+        self._rst_sent = True
+
+        try:
+            await self.enqueue_tx(
+                0,
+                self.stream_id,
+                self.snd_nxt,
+                b"",
+                is_rst=True,
+            )
+        except Exception:
+            pass
+
+        await self.close(reason=reason, send_fin=False)
+
+    async def close(self, reason="Unknown", send_fin=True):
         if self.closed:
             return
 
         self.closed = True
         self.close_reason = reason
+        self._close_time = time.monotonic()
 
-        if not self._fin_sent:
+        if (
+            send_fin
+            and not self._fin_sent
+            and not self._rst_sent
+            and not self._rst_received
+        ):
             self._fin_sent = True
+            if self._fin_seq_sent is None:
+                self._fin_seq_sent = self.snd_nxt
             try:
-                await self.enqueue_tx(4, self.stream_id, 0, b"", is_fin=True)
+                await self.enqueue_tx(
+                    4,
+                    self.stream_id,
+                    self._fin_seq_sent,
+                    b"",
+                    is_fin=True,
+                )
             except Exception:
                 pass
 

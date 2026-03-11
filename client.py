@@ -1636,15 +1636,15 @@ class MasterDnsVPNClient:
                     raise ConnectionError("Stream closed before handshake completion.")
 
             except asyncio.TimeoutError:
-                self.logger.warning(
-                    f"SOCKS5 Handshake timed out for stream {stream_id}"
-                )
+                self.logger.debug(f"SOCKS5 Handshake timed out for stream {stream_id}")
                 try:
                     writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
                     await writer.drain()
                 except Exception:
                     pass
-                await self.close_stream(stream_id, reason="SOCKS Target Timeout")
+                await self.close_stream(
+                    stream_id, reason="SOCKS Target Timeout", abortive=True
+                )
 
             except Exception as e:
                 self.logger.debug(f"SOCKS Target Rejected by Server: {e}")
@@ -1654,7 +1654,9 @@ class MasterDnsVPNClient:
                 except Exception:
                     pass
                 await self.close_stream(
-                    stream_id, reason="SOCKS Target Rejected by Server"
+                    stream_id,
+                    reason="SOCKS Target Rejected by Server",
+                    abortive=True,
                 )
 
     async def _stream_syn_handler(
@@ -1691,6 +1693,8 @@ class MasterDnsVPNClient:
         data,
         is_ack=False,
         is_fin=False,
+        is_fin_ack=False,
+        is_rst=False,
         is_resend=False,
         is_socks_syn=False,
     ):
@@ -1707,6 +1711,12 @@ class MasterDnsVPNClient:
             effective_priority = priority
         elif is_ack:
             ptype = Packet_Type.STREAM_DATA_ACK
+            effective_priority = 0
+        elif is_fin_ack:
+            ptype = Packet_Type.STREAM_FIN_ACK
+            effective_priority = 0
+        elif is_rst:
+            ptype = Packet_Type.STREAM_RST
             effective_priority = 0
         elif is_fin:
             ptype = Packet_Type.STREAM_FIN
@@ -2086,13 +2096,27 @@ class MasterDnsVPNClient:
             stream_data["fin_retries"] = 99
 
             arq = stream_data.get("stream")
-            if arq and getattr(arq, "_fin_sent", False):
-                real_reason = getattr(
-                    arq, "close_reason", "Local App Closed Connection"
-                )
-                await self.close_stream(stream_id, reason=real_reason)
-            else:
-                await self.close_stream(stream_id, reason="Server sent FIN")
+            if arq:
+                arq._fin_received = True
+                arq._fin_seq_received = sn
+                await arq._try_finalize_remote_eof()
+
+        elif ptype == Packet_Type.STREAM_FIN_ACK and stream_id_exists:
+            arq = self.active_streams[stream_id].get("stream")
+            if arq and arq._fin_seq_sent == sn:
+                arq._fin_acked = True
+                if arq._fin_received:
+                    await arq._try_finalize_remote_eof()
+                elif not arq.snd_buf:
+                    await self.close_stream(stream_id, reason="FIN acknowledged")
+
+        elif ptype == Packet_Type.STREAM_RST and stream_id_exists:
+            arq = self.active_streams[stream_id].get("stream")
+            if arq:
+                arq._rst_received = True
+            await self.close_stream(
+                stream_id, reason="Remote stream reset", abortive=True
+            )
         elif ptype == Packet_Type.PACKED_CONTROL_BLOCKS and data:
             _unpack_from = struct.unpack_from
             for i in range(0, len(data), 5):
@@ -2123,7 +2147,9 @@ class MasterDnsVPNClient:
                 )
                 self.session_restart_event.set()
 
-    async def close_stream(self, stream_id: int, reason: str = "Unknown") -> None:
+    async def close_stream(
+        self, stream_id: int, reason: str = "Unknown", abortive: bool = False
+    ) -> None:
         """Safely and fully close a specific local stream and salvage pending FIN/ACKs."""
 
         stream_data = self.active_streams.get(stream_id)
@@ -2142,17 +2168,17 @@ class MasterDnsVPNClient:
             f"<yellow>Closing Client Stream <cyan>{stream_id}</cyan>. Reason: <yellow>{reason}</yellow></yellow>"
         )
 
-        stream_obj = stream_data.get("stream")
+        stream_obj = stream_data.get("stream") or stream_data.get("arq_obj")
         if stream_obj:
             try:
-                await stream_obj.close(reason=reason)
-            except Exception as e:
-                self.logger.debug(
-                    f"<red>Error closing ARQStream {stream_id}: {e}</red>"
-                )
-        else:
-            fin_data = b"FIN:" + os.urandom(4)
-            await self._client_enqueue_tx(1, stream_id, 0, fin_data, is_fin=True)
+                if abortive:
+                    await stream_obj.abort(reason=reason)
+                else:
+                    await stream_obj.close(
+                        reason=reason, send_fin=False if stream_obj._rst_sent else True
+                    )
+            except Exception:
+                pass
 
         pending_tx = stream_data.get("tx_queue", [])
         if pending_tx:
@@ -2192,9 +2218,9 @@ class MasterDnsVPNClient:
                         await self._client_enqueue_tx(0, sid, 0, syn_data)
 
                     elif status == "TIME_WAIT":
-                        if (now - close_time) > 15.0:
+                        if (now - close_time) > 45.0:
                             self.active_streams.pop(sid, None)
-                        elif (now - last_act) > 5.0 and s.get("fin_retries", 0) < 2:
+                        elif (now - last_act) > 3.0 and s.get("fin_retries", 0) < 15:
                             s["last_activity_time"] = now
                             s["fin_retries"] = s.get("fin_retries", 0) + 1
                             fin_data = b"FIN:" + os.urandom(4)

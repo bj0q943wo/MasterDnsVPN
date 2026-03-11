@@ -31,6 +31,8 @@ class Packet_Type:
     )
     SOCKS5_SYN = 0x12  # Client initiates SOCKS5 handshake
     SOCKS5_SYN_ACK = 0x13  # Server acknowledges SOCKS5 handshake
+    STREAM_FIN_ACK = 0x14  # ACK for STREAM_FIN
+    STREAM_RST = 0x15  # Abort/reset stream immediately
     ERROR_DROP = 0xFF  # Invalid/Drop signal
 
 
