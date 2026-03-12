@@ -192,6 +192,18 @@ class MasterDnsVPNServer(PacketQueueMixin):
             Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK: self._handle_control_ack_packet,
             Packet_Type.PACKED_CONTROL_BLOCKS: self._handle_packed_control_blocks_packet,
         }
+        # Heavy packet handlers are deferred to background tasks so DNS responses
+        # can be returned immediately from queue without waiting on local I/O.
+        self._deferred_handler_packet_types = {
+            Packet_Type.STREAM_SYN,
+            Packet_Type.SOCKS5_SYN,
+            Packet_Type.STREAM_DATA,
+            Packet_Type.STREAM_RESEND,
+            Packet_Type.STREAM_FIN,
+            Packet_Type.STREAM_RST,
+            Packet_Type.STREAM_FIN_ACK,
+            Packet_Type.PACKED_CONTROL_BLOCKS,
+        }
         self._control_request_ack_map = {
             Packet_Type.STREAM_KEEPALIVE: Packet_Type.STREAM_KEEPALIVE_ACK,
             Packet_Type.STREAM_WINDOW_UPDATE: Packet_Type.STREAM_WINDOW_UPDATE_ACK,
@@ -971,6 +983,26 @@ class MasterDnsVPNServer(PacketQueueMixin):
             return
         await handler(session_id, stream_id, sn, labels, extracted_header, now_mono)
 
+    async def _dispatch_stream_packet_nonblocking(
+        self, packet_type, session_id, stream_id, sn, labels, extracted_header, now_mono
+    ):
+        """Dispatch handlers with deferred execution for heavy packet types."""
+        dispatch_coro = self._dispatch_stream_packet(
+            packet_type=packet_type,
+            session_id=session_id,
+            stream_id=stream_id,
+            sn=sn,
+            labels=labels,
+            extracted_header=extracted_header,
+            now_mono=now_mono,
+        )
+
+        if packet_type in self._deferred_handler_packet_types and self.loop:
+            self._spawn_background_task(dispatch_coro)
+            return
+
+        await dispatch_coro
+
     async def _handle_pre_session_packet(
         self,
         packet_type: int,
@@ -1075,7 +1107,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
             session["streams"] = {}
             streams = session["streams"]
 
-        await self._dispatch_stream_packet(
+        await self._dispatch_stream_packet_nonblocking(
             packet_type=packet_type,
             session_id=session_id,
             stream_id=stream_id,
