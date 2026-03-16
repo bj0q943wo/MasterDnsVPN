@@ -696,6 +696,11 @@ class MasterDnsVPNClient(PacketQueueMixin):
         if stream_id <= 0 or self.balancer.valid_servers_count <= 0:
             return self.balancer.get_unique_servers(target_count)
 
+        # Keep control/setup packets on the normal balancer path so SYN/SOCKS
+        # handshakes and terminal control traffic can escape a slow preferred resolver.
+        if int(pkt_type) not in (Packet_Type.STREAM_DATA, Packet_Type.STREAM_RESEND):
+            return self.balancer.get_unique_servers(target_count)
+
         stream_data = self.active_streams.get(stream_id)
         if not stream_data:
             return self.balancer.get_unique_servers(target_count)
@@ -2791,6 +2796,18 @@ class MasterDnsVPNClient(PacketQueueMixin):
             self.logger.debug(
                 f"<magenta>[LOOP]</magenta> Starting {num_workers} TX workers."
             )
+
+            self.logger.info("<yellow>" + "=" * 80 + "</yellow>")
+            self.logger.success(
+                "<fg #ff456d>📢 Join our Telegram channel: <cyan>@MasterDNSVPN</cyan> for support and updates! 📢</fg #ff456d>"
+            )
+
+            self.logger.info("<yellow>" + "=" * 80 + "</yellow>")
+            self.logger.success(
+                "<cyan>GitHub:</cyan> <blue>https://github.com/masterking32/MasterDnsVPN</blue>"
+            )
+
+            self.logger.info("<yellow>" + "=" * 80 + "</yellow>")
             for _ in range(num_workers):
                 self.workers.append(self.loop.create_task(self._tx_worker()))
 
