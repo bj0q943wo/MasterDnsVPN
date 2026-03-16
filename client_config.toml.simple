@@ -68,6 +68,12 @@ SOCKS_HANDSHAKE_TIMEOUT = 300.0
 # Higher values increase bandwidth/CPU pressure quickly.
 PACKET_DUPLICATION_COUNT = 2
 
+# Stream-level soft affinity: after this many STREAM_RESEND packets in a row,
+# switch the stream's preferred resolver if another active resolver is available.
+STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 2
+# Minimum seconds between preferred-resolver switches for the same stream.
+STREAM_RESOLVER_FAILOVER_COOLDOWN = 1.0
+
 # Max packet/control blocks packed per DNS operation (user upper bound).
 # Runtime value = min(MAX_PACKETS_PER_BATCH, MTU-based upload limit).
 # Upload MTU limit uses 50% of negotiated upload MTU: floor((MTU*0.50)/5).

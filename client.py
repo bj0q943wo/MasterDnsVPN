@@ -198,6 +198,14 @@ class MasterDnsVPNClient(PacketQueueMixin):
             self.config.get("MAX_PACKETS_PER_BATCH", 100)
         )
         self.packet_duplication_count = self.config.get("PACKET_DUPLICATION_COUNT", 1)
+        self.stream_resolver_failover_resend_threshold: int = max(
+            1,
+            int(self.config.get("STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD", 2)),
+        )
+        self.stream_resolver_failover_cooldown: float = max(
+            0.1,
+            float(self.config.get("STREAM_RESOLVER_FAILOVER_COOLDOWN", 1.0)),
+        )
         self.upload_compression_type: int = normalize_compression_type(
             self.config.get("UPLOAD_COMPRESSION_TYPE", Compression_Type.OFF)
         )
@@ -249,6 +257,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         self.success_mtu_checks: bool = False
         self.max_packed_blocks: int = 1
         self.connections_map: list = []
+        self.connections_by_key: dict[str, dict] = {}
         self.session_id = 0
         self.session_cookie = 0
         self.synced_upload_mtu = 0
@@ -585,6 +594,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         unique_resolvers = list(unique_resolvers)
 
         self.connections_map = []
+        self.connections_by_key = {}
         for domain in unique_domains:
             for resolver in unique_resolvers:
                 resolver_host, resolver_port = resolver
@@ -602,6 +612,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
                 conn["_key"] = self._get_connection_key(conn)
                 self._init_recheck_meta(conn)
                 self.connections_map.append(conn)
+                self.connections_by_key[conn["_key"]] = conn
 
     def _get_connection_key(self, connection: dict) -> str:
         resolver, resolver_port = self._get_connection_resolver_addr(connection)
@@ -609,6 +620,131 @@ class MasterDnsVPNClient(PacketQueueMixin):
         key = self._make_server_key(resolver, resolver_port, domain)
         connection["_key"] = key
         return key
+
+    def _get_connection_by_key(self, server_key: str) -> dict | None:
+        conn = self.connections_by_key.get(str(server_key or "").strip())
+        return conn if conn else None
+
+    def _get_valid_stream_preferred_connection(self, stream_data: dict) -> dict | None:
+        preferred_key = str(stream_data.get("preferred_server_key", "") or "").strip()
+        if not preferred_key:
+            return None
+        conn = self._get_connection_by_key(preferred_key)
+        if conn and conn.get("is_valid"):
+            return conn
+        return None
+
+    def _select_alternate_stream_connection(self, exclude_key: str = "") -> dict | None:
+        blocked_key = str(exclude_key or "").strip()
+        for conn in self.balancer.valid_servers:
+            if not conn or not conn.get("is_valid"):
+                continue
+            if blocked_key and conn.get("_key") == blocked_key:
+                continue
+            return conn
+        return None
+
+    def _set_stream_preferred_connection(
+        self, stream_data: dict, connection: dict | None
+    ) -> dict | None:
+        if not stream_data:
+            return None
+        if not connection:
+            stream_data["preferred_server_key"] = ""
+            return None
+        stream_data["preferred_server_key"] = str(connection.get("_key", "") or "")
+        stream_data["resolver_resend_streak"] = 0
+        stream_data["last_resolver_failover_at"] = time.monotonic()
+        return connection
+
+    def _ensure_stream_preferred_connection(self, stream_data: dict) -> dict | None:
+        preferred = self._get_valid_stream_preferred_connection(stream_data)
+        if preferred:
+            return preferred
+        fallback = self.balancer.get_best_server()
+        if fallback:
+            return self._set_stream_preferred_connection(stream_data, fallback)
+        return None
+
+    def _maybe_failover_stream_preferred_connection(
+        self, stream_data: dict
+    ) -> dict | None:
+        current = self._get_valid_stream_preferred_connection(stream_data)
+        if current is None:
+            return self._ensure_stream_preferred_connection(stream_data)
+
+        now = time.monotonic()
+        last_switch = float(stream_data.get("last_resolver_failover_at", 0.0) or 0.0)
+        if (now - last_switch) < self.stream_resolver_failover_cooldown:
+            return current
+
+        replacement = self._select_alternate_stream_connection(
+            exclude_key=str(current.get("_key", "") or "")
+        )
+        if replacement:
+            return self._set_stream_preferred_connection(stream_data, replacement)
+        return current
+
+    def _note_stream_progress(self, stream_data: dict) -> None:
+        if stream_data:
+            stream_data["resolver_resend_streak"] = 0
+
+    def _select_target_connections_for_packet(
+        self, pkt_type: int, stream_id: int
+    ) -> list[dict]:
+        target_count = max(1, int(self.packet_duplication_count))
+        if stream_id <= 0 or self.balancer.valid_servers_count <= 0:
+            return self.balancer.get_unique_servers(target_count)
+
+        stream_data = self.active_streams.get(stream_id)
+        if not stream_data:
+            return self.balancer.get_unique_servers(target_count)
+
+        if int(pkt_type) == Packet_Type.STREAM_RESEND:
+            streak = int(stream_data.get("resolver_resend_streak", 0)) + 1
+            stream_data["resolver_resend_streak"] = streak
+            if streak >= self.stream_resolver_failover_resend_threshold:
+                preferred = self._maybe_failover_stream_preferred_connection(
+                    stream_data
+                )
+            else:
+                preferred = self._ensure_stream_preferred_connection(stream_data)
+        else:
+            preferred = self._ensure_stream_preferred_connection(stream_data)
+
+        selected = []
+        seen_keys = set()
+
+        if preferred and preferred.get("is_valid"):
+            selected.append(preferred)
+            seen_keys.add(preferred.get("_key"))
+
+        if len(selected) >= target_count:
+            return selected[:target_count]
+
+        for conn in self.balancer.get_unique_servers(target_count):
+            if not conn or not conn.get("is_valid"):
+                continue
+            conn_key = conn.get("_key")
+            if conn_key in seen_keys:
+                continue
+            selected.append(conn)
+            seen_keys.add(conn_key)
+            if len(selected) >= target_count:
+                return selected
+
+        for conn in self.balancer.valid_servers:
+            if not conn or not conn.get("is_valid"):
+                continue
+            conn_key = conn.get("_key")
+            if conn_key in seen_keys:
+                continue
+            selected.append(conn)
+            seen_keys.add(conn_key)
+            if len(selected) >= target_count:
+                break
+
+        return selected
 
     def _init_recheck_meta(self, connection: dict) -> None:
         connection.setdefault("_recheck_fail_count", 0)
@@ -3022,7 +3158,12 @@ class MasterDnsVPNClient(PacketQueueMixin):
             "track_types": set(),
             "track_seq_packets": set(),
             "track_fragment_packets": set(),
+            "preferred_server_key": "",
+            "resolver_resend_streak": 0,
+            "last_resolver_failover_at": 0.0,
         }
+
+        self._ensure_stream_preferred_connection(self.active_streams[stream_id])
 
         if not is_socks5:
             await self._enqueue_packet(
@@ -3437,8 +3578,8 @@ class MasterDnsVPNClient(PacketQueueMixin):
                 self.dns_parser.codec_transform(data, encrypt=True) if data else b""
             )
 
-            target_conns = self.balancer.get_unique_servers(
-                self.packet_duplication_count
+            target_conns = self._select_target_connections_for_packet(
+                pkt_type, stream_id
             )
 
             for conn in target_conns:
@@ -3534,6 +3675,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         stream_id_exists = stream_data is not None
         if stream_id_exists:
             stream_data["last_activity_time"] = time.monotonic()
+            self._note_stream_progress(stream_data)
 
         if ptype == Packet_Type.PACKED_CONTROL_BLOCKS and data:
             _unpack_from = self._block_packer.unpack_from
