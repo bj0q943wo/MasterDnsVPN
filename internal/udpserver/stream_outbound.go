@@ -84,7 +84,7 @@ func (s *streamOutboundStore) Enqueue(sessionID uint8, packet VpnProto.Packet) b
 	packet.Payload = append([]byte(nil), packet.Payload...)
 	if packet.PacketType == Enums.PACKET_STREAM_RST {
 		pruneOutboundStreamPackets(session, packet.StreamID)
-		prependOutboundPacket(&session.queue, packet)
+		session.queue = append(session.queue, packet)
 		return true
 	}
 	if packet.PacketType == Enums.PACKET_STREAM_DATA && len(session.queue)+len(session.pending) >= s.effectiveQueueLimit() {
@@ -315,15 +315,6 @@ func containsExpiredStream(items []uint16, streamID uint16) bool {
 		}
 	}
 	return false
-}
-
-func prependOutboundPacket(queue *[]VpnProto.Packet, packet VpnProto.Packet) {
-	if queue == nil {
-		return
-	}
-	*queue = append(*queue, VpnProto.Packet{})
-	copy((*queue)[1:], (*queue)[:len(*queue)-1])
-	(*queue)[0] = packet
 }
 
 func popNextOutboundPacket(session *streamOutboundSession) (VpnProto.Packet, bool) {

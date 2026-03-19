@@ -241,13 +241,7 @@ func (c *Client) queueStreamPacket(stream *clientStream, packetType uint8, paylo
 		CreatedAt:   stream.LastActivityAt,
 		RetryDelay:  streamRetryBaseLocked(stream),
 	}
-	if packetType == Enums.PACKET_STREAM_RST {
-		stream.TXQueue = append(stream.TXQueue, clientStreamTXPacket{})
-		copy(stream.TXQueue[1:], stream.TXQueue[:len(stream.TXQueue)-1])
-		stream.TXQueue[0] = packet
-	} else {
-		stream.TXQueue = append(stream.TXQueue, packet)
-	}
+	stream.TXQueue = append(stream.TXQueue, packet)
 	notifyStreamWake(stream)
 	return nil
 }
@@ -643,14 +637,12 @@ func (c *Client) expireClientStreamTX(stream *clientStream, now time.Time) bool 
 		if stream.NextSequence == 0 {
 			stream.NextSequence = 1
 		}
-		stream.TXQueue = append(stream.TXQueue, clientStreamTXPacket{})
-		copy(stream.TXQueue[1:], stream.TXQueue[:len(stream.TXQueue)-1])
-		stream.TXQueue[0] = clientStreamTXPacket{
+		stream.TXQueue = append(stream.TXQueue, clientStreamTXPacket{
 			PacketType:  Enums.PACKET_STREAM_RST,
 			SequenceNum: stream.NextSequence,
 			CreatedAt:   now,
 			RetryDelay:  streamRetryBaseLocked(stream),
-		}
+		})
 		notifyStreamWake(stream)
 		return true
 	}
