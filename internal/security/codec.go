@@ -101,7 +101,11 @@ func (c *Codec) Method() int {
 }
 
 func (c *Codec) EncryptAndEncodeLowerBase36(data []byte) (string, error) {
-	encrypted, err := c.Encrypt(data)
+	if c == nil {
+		return "", ErrInvalidCodecMethod
+	}
+
+	encrypted, err := c.encrypt(data)
 	if err != nil {
 		return "", err
 	}
@@ -109,19 +113,27 @@ func (c *Codec) EncryptAndEncodeLowerBase36(data []byte) (string, error) {
 }
 
 func (c *Codec) DecodeLowerBase36AndDecrypt(data []byte) ([]byte, error) {
+	if c == nil {
+		return nil, ErrInvalidCodecMethod
+	}
+
 	decoded, err := baseCodec.DecodeLowerBase36(data)
 	if err != nil {
 		return nil, err
 	}
-	return c.Decrypt(decoded)
+	return c.decrypt(decoded)
 }
 
 func (c *Codec) DecodeLowerBase36StringAndDecrypt(data string) ([]byte, error) {
+	if c == nil {
+		return nil, ErrInvalidCodecMethod
+	}
+
 	decoded, err := baseCodec.DecodeLowerBase36String(data)
 	if err != nil {
 		return nil, err
 	}
-	return c.Decrypt(decoded)
+	return c.decrypt(decoded)
 }
 
 func (c *Codec) noCrypto(data []byte) ([]byte, error) {
@@ -129,12 +141,12 @@ func (c *Codec) noCrypto(data []byte) ([]byte, error) {
 }
 
 func (c *Codec) xorCrypto(data []byte) ([]byte, error) {
-	if len(data) == 0 || len(c.key) == 0 {
+	key := c.key
+	keyLen := len(key)
+	if len(data) == 0 || keyLen == 0 {
 		return data, nil
 	}
 
-	key := c.key
-	keyLen := len(key)
 	out := make([]byte, len(data))
 	if keyLen == 1 {
 		mask := key[0]
@@ -144,13 +156,12 @@ func (c *Codec) xorCrypto(data []byte) ([]byte, error) {
 		return out, nil
 	}
 
-	for base := 0; base < len(data); base += keyLen {
-		limit := keyLen
-		if remaining := len(data) - base; remaining < limit {
-			limit = remaining
-		}
-		for i := 0; i < limit; i++ {
-			out[base+i] = data[base+i] ^ key[i]
+	keyIndex := 0
+	for i := 0; i < len(data); i++ {
+		out[i] = data[i] ^ key[keyIndex]
+		keyIndex++
+		if keyIndex == keyLen {
+			keyIndex = 0
 		}
 	}
 	return out, nil
