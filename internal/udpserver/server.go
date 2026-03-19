@@ -548,10 +548,12 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, se
 	if sessionRecord == nil {
 		return nil
 	}
+
 	s.expireStalledOutboundStreams(sessionID, now)
 	if queued, ok := s.streamOutbound.Next(sessionID, now); ok {
 		return s.buildSessionVPNResponse(questionPacket, requestName, sessionRecord, queued)
 	}
+
 	payload := s.nextPongPayload()
 
 	return s.buildSessionVPNResponse(questionPacket, requestName, sessionRecord, VpnProto.Packet{

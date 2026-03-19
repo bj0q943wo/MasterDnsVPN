@@ -168,20 +168,28 @@ func (s *streamOutboundStore) ExpireStalled(sessionID uint8, now time.Time, maxR
 		return nil
 	}
 
+	ttlDeadline := now.Add(-ttl)
 	expired := make([]uint16, 0, 2)
+	expiredSet := make(map[uint16]struct{}, 2)
 	for _, pending := range session.pending {
-		if pending.RetryCount < maxRetries && now.Sub(pending.CreatedAt) < ttl {
+		if pending.RetryCount < maxRetries && pending.CreatedAt.After(ttlDeadline) {
 			continue
 		}
-		if !containsExpiredStream(expired, pending.Packet.StreamID) {
-			expired = append(expired, pending.Packet.StreamID)
+		streamID := pending.Packet.StreamID
+		if _, ok := expiredSet[streamID]; ok {
+			continue
 		}
+		expiredSet[streamID] = struct{}{}
+		expired = append(expired, streamID)
 	}
 	if len(expired) == 0 {
 		return nil
 	}
-	for _, streamID := range expired {
-		pruneOutboundStreamPackets(session, streamID)
+
+	if len(expired) == 1 {
+		pruneOutboundStreamPackets(session, expired[0])
+	} else {
+		pruneOutboundStreamPacketSet(session, expiredSet)
 	}
 	if len(session.pending) == 0 && len(session.queue) == 0 {
 		delete(s.sessions, sessionID)
@@ -295,38 +303,67 @@ func pruneOutboundStreamPackets(session *streamOutboundSession, streamID uint16)
 		return
 	}
 	if len(session.queue) != 0 {
-		filteredQueue := session.queue[:0]
+		writeIdx := 0
 		for _, packet := range session.queue {
-			if packet.StreamID != streamID {
-				filteredQueue = append(filteredQueue, packet)
+			if packet.StreamID == streamID {
+				continue
 			}
+			session.queue[writeIdx] = packet
+			writeIdx++
 		}
-		for idx := len(filteredQueue); idx < len(session.queue); idx++ {
+		for idx := writeIdx; idx < len(session.queue); idx++ {
 			session.queue[idx] = VpnProto.Packet{}
 		}
-		session.queue = filteredQueue
+		session.queue = session.queue[:writeIdx]
 	}
 	if len(session.pending) != 0 {
-		filteredPending := session.pending[:0]
+		writeIdx := 0
 		for _, pending := range session.pending {
-			if pending.Packet.StreamID != streamID {
-				filteredPending = append(filteredPending, pending)
+			if pending.Packet.StreamID == streamID {
+				continue
 			}
+			session.pending[writeIdx] = pending
+			writeIdx++
 		}
-		for idx := len(filteredPending); idx < len(session.pending); idx++ {
+		for idx := writeIdx; idx < len(session.pending); idx++ {
 			session.pending[idx] = outboundPendingPacket{}
 		}
-		session.pending = filteredPending
+		session.pending = session.pending[:writeIdx]
 	}
 }
 
-func containsExpiredStream(items []uint16, streamID uint16) bool {
-	for _, item := range items {
-		if item == streamID {
-			return true
-		}
+func pruneOutboundStreamPacketSet(session *streamOutboundSession, streamIDs map[uint16]struct{}) {
+	if session == nil || len(streamIDs) == 0 {
+		return
 	}
-	return false
+	if len(session.queue) != 0 {
+		writeIdx := 0
+		for _, packet := range session.queue {
+			if _, ok := streamIDs[packet.StreamID]; ok {
+				continue
+			}
+			session.queue[writeIdx] = packet
+			writeIdx++
+		}
+		for idx := writeIdx; idx < len(session.queue); idx++ {
+			session.queue[idx] = VpnProto.Packet{}
+		}
+		session.queue = session.queue[:writeIdx]
+	}
+	if len(session.pending) != 0 {
+		writeIdx := 0
+		for _, pending := range session.pending {
+			if _, ok := streamIDs[pending.Packet.StreamID]; ok {
+				continue
+			}
+			session.pending[writeIdx] = pending
+			writeIdx++
+		}
+		for idx := writeIdx; idx < len(session.pending); idx++ {
+			session.pending[idx] = outboundPendingPacket{}
+		}
+		session.pending = session.pending[:writeIdx]
+	}
 }
 
 func popNextOutboundPacket(session *streamOutboundSession) (VpnProto.Packet, bool) {
