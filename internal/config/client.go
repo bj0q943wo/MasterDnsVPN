@@ -44,6 +44,7 @@ type ClientConfig struct {
 	ResolverBalancingStrategy int               `toml:"RESOLVER_BALANCING_STRATEGY"`
 	MaxPacketsPerBatch        int               `toml:"MAX_PACKETS_PER_BATCH"`
 	StreamTXWindow            int               `toml:"STREAM_TX_WINDOW"`
+	StreamTXQueueLimit        int               `toml:"STREAM_TX_QUEUE_LIMIT"`
 	BaseEncodeData            bool              `toml:"BASE_ENCODE_DATA"`
 	UploadCompressionType     int               `toml:"UPLOAD_COMPRESSION_TYPE"`
 	DownloadCompressionType   int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
@@ -86,6 +87,7 @@ func defaultClientConfig() ClientConfig {
 		ResolverBalancingStrategy: 0,
 		MaxPacketsPerBatch:        5,
 		StreamTXWindow:            4,
+		StreamTXQueueLimit:        128,
 		BaseEncodeData:            false,
 		UploadCompressionType:     compression.TypeOff,
 		DownloadCompressionType:   compression.TypeOff,
@@ -189,6 +191,12 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	}
 	if cfg.StreamTXWindow > 32 {
 		cfg.StreamTXWindow = 32
+	}
+	if cfg.StreamTXQueueLimit < 1 {
+		cfg.StreamTXQueueLimit = 128
+	}
+	if cfg.StreamTXQueueLimit > 4096 {
+		cfg.StreamTXQueueLimit = 4096
 	}
 	if cfg.UploadCompressionType < compression.TypeOff || cfg.UploadCompressionType > compression.TypeZLIB {
 		return cfg, fmt.Errorf("invalid UPLOAD_COMPRESSION_TYPE: %d", cfg.UploadCompressionType)

@@ -19,9 +19,10 @@ const streamOutboundInitialRetryDelay = 350 * time.Millisecond
 const streamOutboundMaxRetryDelay = 2 * time.Second
 
 type streamOutboundStore struct {
-	mu       sync.Mutex
-	sessions map[uint8]*streamOutboundSession
-	window   int
+	mu         sync.Mutex
+	sessions   map[uint8]*streamOutboundSession
+	window     int
+	queueLimit int
 }
 
 type outboundPendingPacket struct {
@@ -35,22 +36,29 @@ type streamOutboundSession struct {
 	pending []outboundPendingPacket
 }
 
-func newStreamOutboundStore(windowSize int) *streamOutboundStore {
+func newStreamOutboundStore(windowSize int, queueLimit int) *streamOutboundStore {
 	if windowSize < 1 {
 		windowSize = 1
 	}
 	if windowSize > 32 {
 		windowSize = 32
 	}
+	if queueLimit < 1 {
+		queueLimit = 256
+	}
+	if queueLimit > 8192 {
+		queueLimit = 8192
+	}
 	return &streamOutboundStore{
-		sessions: make(map[uint8]*streamOutboundSession, 32),
-		window:   windowSize,
+		sessions:   make(map[uint8]*streamOutboundSession, 32),
+		window:     windowSize,
+		queueLimit: queueLimit,
 	}
 }
 
-func (s *streamOutboundStore) Enqueue(sessionID uint8, packet VpnProto.Packet) {
+func (s *streamOutboundStore) Enqueue(sessionID uint8, packet VpnProto.Packet) bool {
 	if s == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,9 +75,13 @@ func (s *streamOutboundStore) Enqueue(sessionID uint8, packet VpnProto.Packet) {
 	if packet.PacketType == Enums.PACKET_STREAM_RST {
 		pruneOutboundStreamPackets(session, packet.StreamID)
 		prependOutboundPacket(&session.queue, packet)
-		return
+		return true
+	}
+	if packet.PacketType == Enums.PACKET_STREAM_DATA && len(session.queue)+len(session.pending) >= s.effectiveQueueLimit() {
+		return false
 	}
 	session.queue = append(session.queue, packet)
+	return true
 }
 
 func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Packet, bool) {
@@ -260,4 +272,14 @@ func (s *streamOutboundStore) effectiveWindow() int {
 		return 32
 	}
 	return s.window
+}
+
+func (s *streamOutboundStore) effectiveQueueLimit() int {
+	if s == nil || s.queueLimit < 1 {
+		return 256
+	}
+	if s.queueLimit > 8192 {
+		return 8192
+	}
+	return s.queueLimit
 }

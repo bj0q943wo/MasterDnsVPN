@@ -1411,6 +1411,35 @@ func TestQueueStreamRSTClearsPendingData(t *testing.T) {
 	}
 }
 
+func TestQueueStreamPacketRejectsDataOnBackpressure(t *testing.T) {
+	c := New(config.ClientConfig{
+		StreamTXWindow:     1,
+		StreamTXQueueLimit: 2,
+	}, nil, nil)
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	stream := c.createStream(23, serverConn)
+	defer c.deleteStream(stream.ID)
+
+	if err := c.queueStreamPacket(stream, Enums.PACKET_STREAM_DATA, []byte("one")); err != nil {
+		t.Fatalf("queueStreamPacket returned error: %v", err)
+	}
+	if packet, _, stop := nextClientStreamTX(stream, 1); stop || packet == nil {
+		t.Fatalf("expected first packet to move inflight, stop=%v packet=%v", stop, packet)
+	}
+	if err := c.queueStreamPacket(stream, Enums.PACKET_STREAM_DATA, []byte("two")); err != nil {
+		t.Fatalf("queueStreamPacket returned error: %v", err)
+	}
+	if err := c.queueStreamPacket(stream, Enums.PACKET_STREAM_DATA, []byte("three")); !errors.Is(err, ErrClientStreamBackpressure) {
+		t.Fatalf("expected backpressure error, got=%v", err)
+	}
+	if err := c.queueStreamPacket(stream, Enums.PACKET_STREAM_FIN, nil); err != nil {
+		t.Fatalf("control packet should still enqueue under backpressure: %v", err)
+	}
+}
+
 func TestDispatchDNSQueryFailsWithoutValidConnections(t *testing.T) {
 	codec, err := security.NewCodec(0, "")
 	if err != nil {

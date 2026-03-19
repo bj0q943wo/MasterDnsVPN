@@ -37,13 +37,31 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 				if !ok {
 					return
 				}
-				s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
+				if !s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
 					PacketType:      Enums.PACKET_STREAM_DATA,
 					StreamID:        streamID,
 					SequenceNum:     sequenceNum,
 					CompressionType: compressionType,
 					Payload:         append([]byte(nil), buffer[:n]...),
-				})
+				}) {
+					if s.log != nil {
+						s.log.Warnf(
+							"🚧 <yellow>Upstream Stream Backpressure</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan>",
+							sessionID,
+							streamID,
+						)
+					}
+					rstNow := time.Now()
+					if rstSeq, ok := s.streams.NextOutboundSequence(sessionID, streamID, rstNow); ok {
+						_ = s.streams.MarkReset(sessionID, streamID, rstSeq, rstNow)
+						_ = s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
+							PacketType:  Enums.PACKET_STREAM_RST,
+							StreamID:    streamID,
+							SequenceNum: rstSeq,
+						})
+					}
+					return
+				}
 			}
 
 			if err == nil {
@@ -53,7 +71,7 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 				now := time.Now()
 				if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, now); ok {
 					_, _ = s.streams.MarkLocalFin(sessionID, streamID, sequenceNum, now)
-					s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
+					_ = s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
 						PacketType:  Enums.PACKET_STREAM_FIN,
 						StreamID:    streamID,
 						SequenceNum: sequenceNum,
@@ -72,7 +90,7 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 			}
 			now := time.Now()
 			if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, now); ok {
-				s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
+				_ = s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
 					PacketType:  Enums.PACKET_STREAM_RST,
 					StreamID:    streamID,
 					SequenceNum: sequenceNum,

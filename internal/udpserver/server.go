@@ -77,7 +77,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		domainMatcher:        domainmatcher.New(cfg.Domain, cfg.MinVPNLabelLength),
 		sessions:             newSessionStore(),
 		streams:              newStreamStateStore(),
-		streamOutbound:       newStreamOutboundStore(cfg.StreamOutboundWindow),
+		streamOutbound:       newStreamOutboundStore(cfg.StreamOutboundWindow, cfg.StreamOutboundQueueLimit),
 		invalidCookieTracker: newInvalidCookieTracker(),
 		dnsCache: dnscache.New(
 			cfg.DNSCacheMaxRecords,

@@ -50,12 +50,13 @@ type Client struct {
 	syncedUploadChars   int
 	maxPackedBlocks     int
 
-	exchangeQueryFn func(Connection, []byte, time.Duration) ([]byte, error)
-	fragmentLimits  sync.Map
-	stream0Runtime  *stream0Runtime
-	streamsMu       sync.Mutex
-	streams         map[uint16]*clientStream
-	streamTXWindow  int
+	exchangeQueryFn    func(Connection, []byte, time.Duration) ([]byte, error)
+	fragmentLimits     sync.Map
+	stream0Runtime     *stream0Runtime
+	streamsMu          sync.Mutex
+	streams            map[uint16]*clientStream
+	streamTXWindow     int
+	streamTXQueueLimit int
 }
 
 type Connection struct {
@@ -132,8 +133,9 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		dnsInflight: newDNSInflightManager(
 			time.Duration(cfg.LocalDNSPendingTimeoutSec * float64(time.Second)),
 		),
-		streams:        make(map[uint16]*clientStream, 16),
-		streamTXWindow: cfg.StreamTXWindow,
+		streams:            make(map[uint16]*clientStream, 16),
+		streamTXWindow:     cfg.StreamTXWindow,
+		streamTXQueueLimit: cfg.StreamTXQueueLimit,
 	}
 	c.ResetRuntimeState(true)
 	c.uploadCompression = uint8(cfg.UploadCompressionType)

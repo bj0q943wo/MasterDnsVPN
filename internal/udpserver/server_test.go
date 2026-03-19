@@ -490,7 +490,7 @@ func TestHandlePacketPingReturnsQueuedStreamPacket(t *testing.T) {
 }
 
 func TestStreamOutboundStoreSupportsWindowAndOutOfOrderAck(t *testing.T) {
-	store := newStreamOutboundStore(4)
+	store := newStreamOutboundStore(4, 256)
 	now := time.Now()
 
 	store.Enqueue(7, VpnProto.Packet{
@@ -530,7 +530,7 @@ func TestStreamOutboundStoreSupportsWindowAndOutOfOrderAck(t *testing.T) {
 }
 
 func TestStreamOutboundStoreResetClearsStreamBacklog(t *testing.T) {
-	store := newStreamOutboundStore(4)
+	store := newStreamOutboundStore(4, 256)
 	now := time.Now()
 
 	store.Enqueue(9, VpnProto.Packet{
@@ -563,6 +563,47 @@ func TestStreamOutboundStoreResetClearsStreamBacklog(t *testing.T) {
 	after, ok := store.Next(9, now)
 	if !ok || after.StreamID != 44 || after.PacketType != Enums.PACKET_STREAM_DATA {
 		t.Fatalf("expected unrelated stream packet to remain queued, got ok=%v packet=%+v", ok, after)
+	}
+}
+
+func TestStreamOutboundStoreDropsOnlyDataWhenQueueLimitReached(t *testing.T) {
+	store := newStreamOutboundStore(1, 2)
+	now := time.Now()
+
+	if !store.Enqueue(3, VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_DATA,
+		StreamID:    7,
+		SequenceNum: 1,
+		Payload:     []byte("one"),
+	}) {
+		t.Fatal("expected first data enqueue to succeed")
+	}
+	first, ok := store.Next(3, now)
+	if !ok || first.SequenceNum != 1 {
+		t.Fatalf("unexpected first packet: ok=%v packet=%+v", ok, first)
+	}
+	if !store.Enqueue(3, VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_DATA,
+		StreamID:    7,
+		SequenceNum: 2,
+		Payload:     []byte("two"),
+	}) {
+		t.Fatal("expected second data enqueue to succeed")
+	}
+	if store.Enqueue(3, VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_DATA,
+		StreamID:    7,
+		SequenceNum: 3,
+		Payload:     []byte("three"),
+	}) {
+		t.Fatal("expected third data enqueue to be rejected by queue limit")
+	}
+	if !store.Enqueue(3, VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_FIN,
+		StreamID:    7,
+		SequenceNum: 4,
+	}) {
+		t.Fatal("expected control packet to bypass data queue limit")
 	}
 }
 

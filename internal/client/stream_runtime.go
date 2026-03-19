@@ -22,6 +22,7 @@ const streamTXInitialRetryDelay = 350 * time.Millisecond
 const streamTXMaxRetryDelay = 2 * time.Second
 
 var ErrClientStreamClosed = errors.New("client stream closed")
+var ErrClientStreamBackpressure = errors.New("client stream send queue full")
 
 func (c *Client) createStream(streamID uint16, conn net.Conn) *clientStream {
 	stream := &clientStream{
@@ -212,6 +213,9 @@ func (c *Client) queueStreamPacket(stream *clientStream, packetType uint8, paylo
 	}
 	if packetType == Enums.PACKET_STREAM_RST && stream.ResetSent {
 		return nil
+	}
+	if packetType == Enums.PACKET_STREAM_DATA && c.effectiveStreamTXQueueLimit() > 0 && len(stream.TXQueue)+len(stream.TXInFlight) >= c.effectiveStreamTXQueueLimit() {
+		return ErrClientStreamBackpressure
 	}
 
 	stream.NextSequence++
@@ -531,6 +535,16 @@ func (c *Client) effectiveStreamTXWindow() int {
 		return 32
 	}
 	return c.streamTXWindow
+}
+
+func (c *Client) effectiveStreamTXQueueLimit() int {
+	if c == nil || c.streamTXQueueLimit < 1 {
+		return 128
+	}
+	if c.streamTXQueueLimit > 4096 {
+		return 4096
+	}
+	return c.streamTXQueueLimit
 }
 
 func clearClientStreamDataLocked(stream *clientStream) {
