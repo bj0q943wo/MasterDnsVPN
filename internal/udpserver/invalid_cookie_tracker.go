@@ -59,7 +59,7 @@ func (t *invalidCookieTracker) Note(sessionID uint8, lookup sessionLookupResult,
 
 	record := t.records[key]
 	record.attempts = pruneAttemptTimes(record.attempts, cutoff)
-	record.attempts = append(record.attempts, nowUnix)
+	record.attempts = appendBoundedAttempt(record.attempts, nowUnix, threshold)
 	if len(record.attempts) < threshold {
 		t.records[key] = record
 		return false
@@ -110,4 +110,16 @@ func pruneAttemptTimes(values []int64, cutoff int64) []int64 {
 		return values[:0]
 	}
 	return values[idx:]
+}
+
+func appendBoundedAttempt(values []int64, nowUnix int64, limit int) []int64 {
+	if limit <= 0 {
+		return values[:0]
+	}
+	if len(values) < limit {
+		return append(values, nowUnix)
+	}
+	copy(values, values[1:])
+	values[len(values)-1] = nowUnix
+	return values
 }

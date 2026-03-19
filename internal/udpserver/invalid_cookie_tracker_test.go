@@ -78,3 +78,29 @@ func TestInvalidCookieTrackerSeparatesClosedSessionState(t *testing.T) {
 		t.Fatal("second closed-session attempt should emit for its own bucket")
 	}
 }
+
+func TestInvalidCookieTrackerBoundsAttemptsByThreshold(t *testing.T) {
+	tracker := newInvalidCookieTracker()
+	now := time.Now()
+	lookup := trackerLookup(10, sessionLookupActive)
+	windowNanos := (5 * time.Second).Nanoseconds()
+	threshold := 3
+
+	for i := 0; i < 20; i++ {
+		tracker.Note(7, lookup, true, 77, now.Add(time.Duration(i)*100*time.Millisecond).UnixNano(), windowNanos, threshold)
+	}
+
+	key := invalidCookieTrackerKey{
+		sessionID:      7,
+		expectedCookie: uint16(lookup.Cookie),
+		packetCookie:   77,
+		state:          uint8(sessionLookupActive),
+	}
+	record, ok := tracker.records[key]
+	if !ok {
+		t.Fatal("tracker record missing")
+	}
+	if len(record.attempts) != threshold {
+		t.Fatalf("attempts must stay bounded by threshold: got=%d want=%d", len(record.attempts), threshold)
+	}
+}
