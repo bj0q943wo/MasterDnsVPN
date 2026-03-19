@@ -51,6 +51,7 @@ type Server struct {
 	dnsCache                *dnscache.Store
 	dnsResolveInflight      *dnsResolveInflightManager
 	dnsUpstreamServers      []string
+	dnsUpstreamBufferPool   sync.Pool
 	dnsFragmentMu           sync.Mutex
 	dnsFragments            map[dnsFragmentKey]*dnsFragmentEntry
 	resolveDNSQueryFn       func([]byte) ([]byte, error)
@@ -86,6 +87,11 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		dnsResolveInflight: newDNSResolveInflightManager(cfg.DNSFragmentAssemblyTimeout()),
 		dnsUpstreamServers: append([]string(nil), cfg.DNSUpstreamServers...),
 		dnsFragments:       make(map[dnsFragmentKey]*dnsFragmentEntry, 32),
+		dnsUpstreamBufferPool: sync.Pool{
+			New: func() any {
+				return make([]byte, 65535)
+			},
+		},
 		dialStreamUpstreamFn: func(network string, address string, timeout time.Duration) (net.Conn, error) {
 			return net.DialTimeout(network, address, timeout)
 		},
@@ -615,7 +621,8 @@ func (s *Server) handlePingRequest(questionPacket []byte, decision domainmatcher
 	if !ok {
 		return nil
 	}
-	if queued, ok := s.streamOutbound.Next(vpnPacket.SessionID, time.Now()); ok {
+	now := time.Now()
+	if queued, ok := s.streamOutbound.Next(vpnPacket.SessionID, now); ok {
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, queued)
 	}
 
@@ -637,6 +644,7 @@ func (s *Server) handleDNSQueryRequest(questionPacket []byte, parsed DnsParser.L
 	if !ok {
 		return nil
 	}
+	now := time.Now()
 
 	if vpnPacket.StreamID != 0 || !vpnPacket.HasSequenceNum {
 		return nil
@@ -659,7 +667,7 @@ func (s *Server) handleDNSQueryRequest(questionPacket []byte, parsed DnsParser.L
 		vpnPacket.Payload,
 		vpnPacket.FragmentID,
 		vpnPacket.TotalFragments,
-		time.Now(),
+		now,
 	)
 	if !ready {
 		if s.log != nil {
@@ -716,6 +724,7 @@ func (s *Server) handleSOCKS5SynRequest(questionPacket []byte, decision domainma
 	if !ok {
 		return nil
 	}
+	now := time.Now()
 
 	target, err := SocksProto.ParseTargetPayload(vpnPacket.Payload)
 	if err != nil {
@@ -774,7 +783,7 @@ func (s *Server) handleSOCKS5SynRequest(questionPacket []byte, decision domainma
 		})
 	}
 
-	record, ok := s.streams.AttachUpstream(vpnPacket.SessionID, vpnPacket.StreamID, target.Host, target.Port, upstreamConn, time.Now())
+	record, ok := s.streams.AttachUpstream(vpnPacket.SessionID, vpnPacket.StreamID, target.Host, target.Port, upstreamConn, now)
 	if !ok || record == nil {
 		safeCloseConn(upstreamConn)
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
@@ -858,7 +867,8 @@ func (s *Server) handleStreamDataRequest(questionPacket []byte, decision domainm
 	if !ok {
 		return nil
 	}
-	streamRecord, ok, isNew := s.streams.ClassifyInboundData(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now())
+	now := time.Now()
+	streamRecord, ok, isNew := s.streams.ClassifyInboundData(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
 	if !ok || streamRecord == nil {
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 			PacketType:  Enums.PACKET_STREAM_RST,
@@ -891,7 +901,7 @@ func (s *Server) handleStreamDataRequest(questionPacket []byte, decision domainm
 					err,
 				)
 			}
-			_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now())
+			_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
 			s.streamOutbound.ClearStream(vpnPacket.SessionID, vpnPacket.StreamID)
 			return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 				PacketType:  Enums.PACKET_STREAM_RST,
@@ -921,14 +931,15 @@ func (s *Server) handleStreamFinRequest(questionPacket []byte, decision domainma
 	if !ok {
 		return nil
 	}
-	if existing, ok, duplicate := s.streams.IsDuplicateRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now()); ok && existing != nil && duplicate {
+	now := time.Now()
+	if existing, ok, duplicate := s.streams.IsDuplicateRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now); ok && existing != nil && duplicate {
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 			PacketType:  Enums.PACKET_STREAM_FIN_ACK,
 			StreamID:    vpnPacket.StreamID,
 			SequenceNum: vpnPacket.SequenceNum,
 		})
 	}
-	if _, ok := s.streams.MarkRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now()); !ok {
+	if _, ok := s.streams.MarkRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now); !ok {
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 			PacketType:  Enums.PACKET_STREAM_RST,
 			StreamID:    vpnPacket.StreamID,
@@ -967,16 +978,17 @@ func (s *Server) handleStreamAckPacket(questionPacket []byte, decision domainmat
 	if !ok {
 		return nil
 	}
+	now := time.Now()
 	switch vpnPacket.PacketType {
 	case Enums.PACKET_STREAM_RST_ACK:
-		_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now())
+		_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
 		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum)
 		s.streamOutbound.ClearStream(vpnPacket.SessionID, vpnPacket.StreamID)
 	case Enums.PACKET_STREAM_DATA_ACK, Enums.PACKET_STREAM_FIN_ACK, Enums.PACKET_STREAM_SYN_ACK:
-		_, _ = s.streams.Touch(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, time.Now())
+		_, _ = s.streams.Touch(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
 		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum)
 	}
-	if queued, ok := s.streamOutbound.Next(vpnPacket.SessionID, time.Now()); ok {
+	if queued, ok := s.streamOutbound.Next(vpnPacket.SessionID, now); ok {
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, queued)
 	}
 	return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{

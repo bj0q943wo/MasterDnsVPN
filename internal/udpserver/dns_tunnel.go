@@ -95,7 +95,7 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 		if resolved, ok := s.dnsResolveInflight.Wait(inflightEntry, waitTimeout); ok && len(resolved) != 0 {
 			return dnscache.PatchResponseForQuery(resolved, rawQuery)
 		}
-		if cached, ok := s.dnsCache.GetReady(cacheKey, rawQuery, time.Now()); ok {
+		if cached, ok := s.dnsCache.GetReady(cacheKey, rawQuery, now); ok {
 			return cached
 		}
 		response, responseErr := DnsParser.BuildServerFailureResponseFromLite(rawQuery, parsed)
@@ -247,12 +247,15 @@ func (s *Server) resolveDNSUpstream(rawQuery []byte) ([]byte, error) {
 			continue
 		}
 
-		buffer := make([]byte, 65535)
+		buffer := s.dnsUpstreamBufferPool.Get().([]byte)
 		n, readErr := conn.Read(buffer)
 		_ = conn.Close()
 		if readErr == nil && n > 0 {
-			return append([]byte(nil), buffer[:n]...), nil
+			response := append([]byte(nil), buffer[:n]...)
+			s.dnsUpstreamBufferPool.Put(buffer)
+			return response, nil
 		}
+		s.dnsUpstreamBufferPool.Put(buffer)
 	}
 
 	return nil, ErrInvalidDNSUpstream

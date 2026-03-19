@@ -32,7 +32,8 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 		for {
 			n, err := conn.Read(buffer)
 			if n > 0 {
-				sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, time.Now())
+				now := time.Now()
+				sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, now)
 				if !ok {
 					return
 				}
@@ -49,8 +50,9 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 				continue
 			}
 			if err == io.EOF {
-				if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, time.Now()); ok {
-					_, _ = s.streams.MarkLocalFin(sessionID, streamID, sequenceNum, time.Now())
+				now := time.Now()
+				if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, now); ok {
+					_, _ = s.streams.MarkLocalFin(sessionID, streamID, sequenceNum, now)
 					s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
 						PacketType:  Enums.PACKET_STREAM_FIN,
 						StreamID:    streamID,
@@ -68,7 +70,8 @@ func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, c
 					err,
 				)
 			}
-			if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, time.Now()); ok {
+			now := time.Now()
+			if sequenceNum, ok := s.streams.NextOutboundSequence(sessionID, streamID, now); ok {
 				s.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
 					PacketType:  Enums.PACKET_STREAM_RST,
 					StreamID:    streamID,
