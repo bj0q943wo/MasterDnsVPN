@@ -292,10 +292,14 @@ func (c *Client) queueStreamPacket(stream *clientStream, packetType uint8, paylo
 		stream.ResetSent = true
 		clearClientStreamDataLocked(stream)
 	}
+
+	// Optimization: Use Payload Pool for data packets to reduce allocations
+	p := arq.AllocPayload(payload)
+
 	packet := clientStreamTXPacket{
 		PacketType:  packetType,
 		SequenceNum: sequenceNum,
-		Payload:     append([]byte(nil), payload...),
+		Payload:     p,
 		CreatedAt:   stream.LastActivityAt,
 		RetryDelay:  streamRetryBaseLocked(stream),
 	}
@@ -323,6 +327,16 @@ func (c *Client) runClientStreamTXLoop(stream *clientStream, timeout time.Durati
 	}()
 	timeout = normalizeTimeout(timeout, defaultRuntimeTimeout)
 
+	// Optimization: Use a single reusable timer for the loop lifecycle
+	waitTimer := time.NewTimer(time.Hour)
+	if !waitTimer.Stop() {
+		select {
+		case <-waitTimer.C:
+		default:
+		}
+	}
+	defer waitTimer.Stop()
+
 	for {
 		if c.expireClientStreamTX(stream, time.Now()) {
 			if streamFinished(stream) {
@@ -344,14 +358,18 @@ func (c *Client) runClientStreamTXLoop(stream *clientStream, timeout time.Durati
 			}
 		}
 		if waitFor > 0 {
-			timer := time.NewTimer(waitFor)
+			waitTimer.Reset(waitFor)
 			select {
-			case <-timer.C:
+			case <-waitTimer.C:
 			case <-stream.TXWake:
-				timer.Stop()
+				if !waitTimer.Stop() {
+					select {
+					case <-waitTimer.C:
+					default:
+					}
+				}
 				continue
 			case <-stream.StopCh:
-				timer.Stop()
 				return
 			}
 		}
@@ -502,6 +520,10 @@ func ackClientStreamTX(stream *clientStream, sequenceNum uint16, ackedAt time.Ti
 			continue
 		}
 		updateClientStreamRTO(stream, stream.TXInFlight[idx], ackedAt)
+		// Release payload back to pool
+		if stream.TXInFlight[idx].Payload != nil {
+			arq.FreePayload(stream.TXInFlight[idx].Payload)
+		}
 		copy(stream.TXInFlight[idx:], stream.TXInFlight[idx+1:])
 		lastIdx := len(stream.TXInFlight) - 1
 		stream.TXInFlight[lastIdx] = clientStreamTXPacket{}
@@ -651,6 +673,8 @@ func clearClientStreamDataLocked(stream *clientStream) {
 		for _, packet := range stream.TXQueue {
 			if packet.PacketType == Enums.PACKET_STREAM_RST {
 				filteredQueue = append(filteredQueue, packet)
+			} else if packet.Payload != nil {
+				arq.FreePayload(packet.Payload)
 			}
 		}
 		for idx := len(filteredQueue); idx < len(stream.TXQueue); idx++ {
@@ -663,6 +687,8 @@ func clearClientStreamDataLocked(stream *clientStream) {
 		for _, packet := range stream.TXInFlight {
 			if packet.PacketType == Enums.PACKET_STREAM_RST {
 				filteredInFlight = append(filteredInFlight, packet)
+			} else if packet.Payload != nil {
+				arq.FreePayload(packet.Payload)
 			}
 		}
 		for idx := len(filteredInFlight); idx < len(stream.TXInFlight); idx++ {
