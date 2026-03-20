@@ -72,6 +72,13 @@ RECHECK_INACTIVE_INTERVAL_SECONDS = 1800.0
 RECHECK_SERVER_INTERVAL_SECONDS = 3.0
 RECHECK_BATCH_SIZE = 5
 
+# Optional runtime lines written into the MTU success output file when a resolver
+# is auto-disabled or re-added by background health checks.
+# Supported placeholders:
+# {IP}, {DOMAIN}, {CAUSE}, {TIME}, {UP_MTU}, {DOWN_MTU}
+RESOLVER_REMOVED_SERVER_LOG_FORMAT = "IP {IP} removed from list at {TIME} due to {CAUSE}"
+RESOLVER_ADDED_SERVER_LOG_FORMAT = "Server {IP} re-added at {TIME} (UP MTU: {UP_MTU}, DOWN MTU: {DOWN_MTU})"
+
 PACKET_DUPLICATION_COUNT = 1
 SETUP_PACKET_DUPLICATION_COUNT = 2
 STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 2
@@ -140,15 +147,9 @@ MTU_SERVERS_FILE_FORMAT = "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
 # Optional text appended once after initial MTU scan is finished.
 MTU_USING_SECTION_SEPARATOR_TEXT = "---- Active MTU Testing Results ----"
 
-# Optional runtime log line written to the MTU output file when a server is auto-disabled.
-# Supported placeholders:
-# {IP}, {DOMAIN}, {CAUSE}, {TIME}, {UP_MTU}, {DOWN_MTU}
-MTU_REMOVED_SERVER_LOG_FORMAT = "IP {IP} removed from list at {TIME} due to {CAUSE}"
-
-# Optional runtime log line written to the MTU output file when a server is re-added.
-# Supported placeholders:
-# {IP}, {DOMAIN}, {TIME}, {UP_MTU}, {DOWN_MTU}
-MTU_ADDED_SERVER_LOG_FORMAT = "Server {IP} re-added at {TIME} (UP MTU: {UP_MTU}, DOWN MTU: {DOWN_MTU})"
+# Legacy aliases still work too:
+# MTU_REMOVED_SERVER_LOG_FORMAT
+# MTU_ADDED_SERVER_LOG_FORMAT
 
 # ------------------------------------------------------------------------------
 # 9) Logging

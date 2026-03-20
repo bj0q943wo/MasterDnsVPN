@@ -182,6 +182,15 @@ func Bootstrap(configPath string) (*Client, error) {
 }
 
 func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Client {
+	removedServerLogFormat := strings.TrimSpace(cfg.MTURemovedServerLogFormat)
+	if removedServerLogFormat == "" {
+		removedServerLogFormat = strings.TrimSpace(cfg.ResolverRemovedServerLogFormat)
+	}
+	addedServerLogFormat := strings.TrimSpace(cfg.MTUAddedServerLogFormat)
+	if addedServerLogFormat == "" {
+		addedServerLogFormat = strings.TrimSpace(cfg.ResolverAddedServerLogFormat)
+	}
+
 	c := &Client{
 		cfg:              cfg,
 		log:              log,
@@ -218,20 +227,16 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		mtuUsingSeparatorText: strings.TrimSpace(
 			cfg.MTUUsingSeparatorText,
 		),
-		mtuRemovedServerLogFormat: strings.TrimSpace(
-			cfg.MTURemovedServerLogFormat,
-		),
-		mtuAddedServerLogFormat: strings.TrimSpace(
-			cfg.MTUAddedServerLogFormat,
-		),
-		streamTXWindow:     cfg.StreamTXWindow,
-		streamTXQueueLimit: cfg.StreamTXQueueLimit,
-		streamTXMaxRetries: cfg.StreamTXMaxRetries,
-		streamTXTTL:        time.Duration(cfg.StreamTXTTLSeconds * float64(time.Second)),
-		resolverHealth:     make(map[string]*resolverHealthState, len(cfg.Domains)*len(cfg.Resolvers)),
-		resolverRecheck:    make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
-		runtimeDisabled:    make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
-		reconnectSignal:    make(chan struct{}, 1),
+		mtuRemovedServerLogFormat: removedServerLogFormat,
+		mtuAddedServerLogFormat:   addedServerLogFormat,
+		streamTXWindow:            cfg.StreamTXWindow,
+		streamTXQueueLimit:        cfg.StreamTXQueueLimit,
+		streamTXMaxRetries:        cfg.StreamTXMaxRetries,
+		streamTXTTL:               time.Duration(cfg.StreamTXTTLSeconds * float64(time.Second)),
+		resolverHealth:            make(map[string]*resolverHealthState, len(cfg.Domains)*len(cfg.Resolvers)),
+		resolverRecheck:           make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
+		runtimeDisabled:           make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
+		reconnectSignal:           make(chan struct{}, 1),
 	}
 
 	if c.localDNSCacheFlushTick <= 0 {

@@ -12,6 +12,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"masterdnsvpn-go/internal/logger"
 )
 
 type resolverHealthEvent struct {
@@ -35,6 +37,13 @@ type resolverDisabledState struct {
 	NextRetryAt time.Time
 	RetryCount  int
 	Cause       string
+}
+
+type resolverRecheckCandidate struct {
+	key             string
+	nextAt          time.Time
+	failCount       int
+	runtimePriority bool
 }
 
 func (c *Client) initResolverRecheckMeta() {
@@ -97,6 +106,10 @@ func (c *Client) runResolverHealthLoop(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+func (c *Client) resolverHealthDebugEnabled() bool {
+	return c != nil && c.log != nil && c.log.Enabled(logger.LevelDebug)
 }
 
 func (c *Client) nextResolverHealthWait(now time.Time) time.Duration {
@@ -268,7 +281,7 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	c.balancer.ResetServerStats(serverKey)
 	if c.log != nil {
 		c.log.Warnf(
-			"🛑 <yellow>Resolver Disabled</yellow> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Cause</blue>: <red>%s</red>",
+			"\U0001F6D1 <yellow>DNS server <cyan>%s</cyan> disabled due to: <red>%s</red></yellow>",
 			conn.ResolverLabel,
 			cause,
 		)
@@ -298,7 +311,7 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 	c.balancer.ResetServerStats(serverKey)
 	if c.log != nil {
 		c.log.Infof(
-			"\U0001F504 <green>Resolver Re-enabled</green> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan>",
+			"\U0001F504 <green>DNS server <cyan>%s</cyan> re-activated after successful recheck.</green>",
 			conn.ResolverLabel,
 		)
 	}
@@ -361,48 +374,62 @@ func (c *Client) runResolverRecheckBatch(now time.Time) {
 		return
 	}
 
-	keys := c.collectDueResolverRechecks(now)
-	if len(keys) == 0 {
+	candidates := c.collectDueResolverRechecks(now)
+	if len(candidates) == 0 {
 		return
 	}
 
 	limit := c.recheckBatchSize()
-	if len(keys) > limit {
-		keys = keys[:limit]
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
 
-	for _, key := range keys {
-		conn := c.connectionPtrByKey(key)
+	for _, candidate := range candidates {
+		conn := c.connectionPtrByKey(candidate.key)
 		if conn == nil || conn.IsValid {
 			continue
 		}
 
-		runtimePriority := c.isRuntimeDisabledResolver(key)
+		if c.resolverHealthDebugEnabled() {
+			c.log.Debugf(
+				"\U0001F50D <cyan>Rechecking inactive resolver</cyan> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Runtime Priority</blue>: <yellow>%t</yellow> <magenta>|</magenta> <blue>Fail Count</blue>: <cyan>%d</cyan>",
+				conn.ResolverLabel,
+				candidate.runtimePriority,
+				candidate.failCount,
+			)
+		}
+
 		if c.recheckResolverConnection(conn) {
-			c.reactivateResolverConnection(key)
+			c.reactivateResolverConnection(candidate.key)
 			continue
 		}
-		c.scheduleResolverRecheckFailure(key, runtimePriority, now)
+
+		c.scheduleResolverRecheckFailure(candidate.key, candidate.runtimePriority, now)
+		if c.resolverHealthDebugEnabled() {
+			c.resolverHealthMu.Lock()
+			nextAt := c.resolverRecheck[candidate.key].NextAt
+			failCount := c.resolverRecheck[candidate.key].FailCount
+			c.resolverHealthMu.Unlock()
+			c.log.Debugf(
+				"\u23ED\uFE0F <yellow>Inactive resolver recheck failed</yellow> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Fail Count</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Next Retry In</blue>: <cyan>%s</cyan>",
+				conn.ResolverLabel,
+				failCount,
+				maxDuration(0, time.Until(nextAt)).Round(time.Second),
+			)
+		}
 	}
 }
 
-func (c *Client) collectDueResolverRechecks(now time.Time) []string {
+func (c *Client) collectDueResolverRechecks(now time.Time) []resolverRecheckCandidate {
 	if c == nil {
 		return nil
-	}
-
-	type candidate struct {
-		key             string
-		nextAt          time.Time
-		failCount       int
-		runtimePriority bool
 	}
 
 	c.resolverHealthMu.Lock()
 	defer c.resolverHealthMu.Unlock()
 
-	runtimeCandidates := make([]candidate, 0, len(c.runtimeDisabled))
-	normalCandidates := make([]candidate, 0, len(c.connections))
+	runtimeCandidates := make([]resolverRecheckCandidate, 0, len(c.runtimeDisabled))
+	normalCandidates := make([]resolverRecheckCandidate, 0, len(c.connections))
 	for key, meta := range c.resolverRecheck {
 		conn := c.connectionPtrByKey(key)
 		if conn == nil || conn.IsValid {
@@ -412,7 +439,7 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []string {
 			continue
 		}
 
-		candidateValue := candidate{
+		candidateValue := resolverRecheckCandidate{
 			key:       key,
 			nextAt:    meta.NextAt,
 			failCount: meta.FailCount,
@@ -427,7 +454,7 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []string {
 		normalCandidates = append(normalCandidates, candidateValue)
 	}
 
-	slices.SortFunc(runtimeCandidates, func(a, b candidate) int {
+	slices.SortFunc(runtimeCandidates, func(a, b resolverRecheckCandidate) int {
 		if cmp := a.nextAt.Compare(b.nextAt); cmp != 0 {
 			return cmp
 		}
@@ -445,7 +472,7 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []string {
 		}
 		return 0
 	})
-	slices.SortFunc(normalCandidates, func(a, b candidate) int {
+	slices.SortFunc(normalCandidates, func(a, b resolverRecheckCandidate) int {
 		if a.failCount < b.failCount {
 			return -1
 		}
@@ -464,18 +491,20 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []string {
 		return 0
 	})
 
-	keys := make([]string, 0, len(runtimeCandidates)+len(normalCandidates))
-	for _, item := range runtimeCandidates {
-		keys = append(keys, item.key)
-	}
-	for _, item := range normalCandidates {
-		keys = append(keys, item.key)
-	}
-	return keys
+	candidates := make([]resolverRecheckCandidate, 0, len(runtimeCandidates)+len(normalCandidates))
+	candidates = append(candidates, runtimeCandidates...)
+	candidates = append(candidates, normalCandidates...)
+	return candidates
 }
 
 func (c *Client) recheckResolverConnection(conn *Connection) bool {
 	if c == nil || conn == nil || c.syncedUploadMTU <= 0 || c.syncedDownloadMTU <= 0 {
+		if conn != nil && c.resolverHealthDebugEnabled() {
+			c.log.Debugf(
+				"Cannot recheck connection <cyan>%s</cyan> because synced MTU values are not available.",
+				conn.ResolverLabel,
+			)
+		}
 		return false
 	}
 	if c.recheckConnectionFn != nil {

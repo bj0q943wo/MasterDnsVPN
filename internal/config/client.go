@@ -81,6 +81,8 @@ type ClientConfig struct {
 	MTUUsingSeparatorText                 string            `toml:"MTU_USING_SECTION_SEPARATOR_TEXT"`
 	MTURemovedServerLogFormat             string            `toml:"MTU_REMOVED_SERVER_LOG_FORMAT"`
 	MTUAddedServerLogFormat               string            `toml:"MTU_ADDED_SERVER_LOG_FORMAT"`
+	ResolverRemovedServerLogFormat        string            `toml:"RESOLVER_REMOVED_SERVER_LOG_FORMAT"`
+	ResolverAddedServerLogFormat          string            `toml:"RESOLVER_ADDED_SERVER_LOG_FORMAT"`
 	LogLevel                              string            `toml:"LOG_LEVEL"`
 	Resolvers                             []ResolverAddress `toml:"-"`
 	ResolverMap                           map[string]int    `toml:"-"`
@@ -147,6 +149,8 @@ func defaultClientConfig() ClientConfig {
 		MTUUsingSeparatorText:                 "",
 		MTURemovedServerLogFormat:             "",
 		MTUAddedServerLogFormat:               "",
+		ResolverRemovedServerLogFormat:        "",
+		ResolverAddedServerLogFormat:          "",
 		LogLevel:                              "INFO",
 	}
 }
@@ -286,6 +290,20 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	cfg.MTUUsingSeparatorText = strings.TrimSpace(cfg.MTUUsingSeparatorText)
 	cfg.MTURemovedServerLogFormat = strings.TrimSpace(cfg.MTURemovedServerLogFormat)
 	cfg.MTUAddedServerLogFormat = strings.TrimSpace(cfg.MTUAddedServerLogFormat)
+	cfg.ResolverRemovedServerLogFormat = strings.TrimSpace(cfg.ResolverRemovedServerLogFormat)
+	cfg.ResolverAddedServerLogFormat = strings.TrimSpace(cfg.ResolverAddedServerLogFormat)
+	if cfg.ResolverRemovedServerLogFormat == "" {
+		cfg.ResolverRemovedServerLogFormat = cfg.MTURemovedServerLogFormat
+	}
+	if cfg.ResolverAddedServerLogFormat == "" {
+		cfg.ResolverAddedServerLogFormat = cfg.MTUAddedServerLogFormat
+	}
+	if cfg.MTURemovedServerLogFormat == "" {
+		cfg.MTURemovedServerLogFormat = cfg.ResolverRemovedServerLogFormat
+	}
+	if cfg.MTUAddedServerLogFormat == "" {
+		cfg.MTUAddedServerLogFormat = cfg.ResolverAddedServerLogFormat
+	}
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)
 	if cfg.EncryptionKey == "" {

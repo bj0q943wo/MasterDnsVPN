@@ -200,3 +200,35 @@ ENCRYPTION_KEY = "secret"
 		t.Fatal("tcp mode should disable local socks5 listener")
 	}
 }
+
+func TestLoadClientConfigCopiesResolverHealthLogAliases(t *testing.T) {
+	dir := t.TempDir()
+
+	configPath := filepath.Join(dir, "client_config.toml")
+	resolversPath := filepath.Join(dir, "client_resolvers.txt")
+
+	if err := os.WriteFile(configPath, []byte(`
+PROTOCOL_TYPE = "SOCKS5"
+DOMAINS = ["v.domain.com"]
+DATA_ENCRYPTION_METHOD = 1
+ENCRYPTION_KEY = "secret"
+RESOLVER_REMOVED_SERVER_LOG_FORMAT = "removed {IP} {CAUSE}"
+RESOLVER_ADDED_SERVER_LOG_FORMAT = "added {IP}"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile config failed: %v", err)
+	}
+	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile resolvers failed: %v", err)
+	}
+
+	cfg, err := LoadClientConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadClientConfig returned error: %v", err)
+	}
+	if cfg.MTURemovedServerLogFormat != "removed {IP} {CAUSE}" {
+		t.Fatalf("unexpected removed alias copy: %q", cfg.MTURemovedServerLogFormat)
+	}
+	if cfg.MTUAddedServerLogFormat != "added {IP}" {
+		t.Fatalf("unexpected added alias copy: %q", cfg.MTUAddedServerLogFormat)
+	}
+}
