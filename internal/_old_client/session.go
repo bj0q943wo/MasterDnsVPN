@@ -4,9 +4,7 @@
 // Github: https://github.com/masterking32
 // Year: 2026
 // ==============================================================================
-// Package client provides the core logic for the MasterDnsVPN client.
-// This file (session.go) handles session states and initialization requests.
-// ==============================================================================
+
 package client
 
 import (
@@ -19,8 +17,6 @@ import (
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
-
-const sessionInitBusyRetryInterval = time.Minute
 
 var (
 	ErrSessionInitFailed = errors.New("session init failed")
@@ -221,10 +217,4 @@ func (c *Client) buildTunnelQuery(domain string, sessionID uint8, packetType uin
 		PacketType: packetType,
 		Payload:    payload,
 	})
-}
-
-func (c *Client) clearSessionResetPending() {
-	if c != nil {
-		c.sessionResetPending.Store(false)
-	}
 }

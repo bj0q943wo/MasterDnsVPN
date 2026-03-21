@@ -4,9 +4,7 @@
 // Github: https://github.com/masterking32
 // Year: 2026
 // ==============================================================================
-// Package client provides the core logic for the MasterDnsVPN client.
-// This file (client_utils.go) handles common client utility functions.
-// ==============================================================================
+
 package client
 
 import (

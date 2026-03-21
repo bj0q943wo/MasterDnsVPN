@@ -4,9 +4,7 @@
 // Github: https://github.com/masterking32
 // Year: 2026
 // ==============================================================================
-// Package client provides the core logic for the MasterDnsVPN client.
-// This file (balancer.go) handles connection balancing strategies.
-// ==============================================================================
+
 package client
 
 import (

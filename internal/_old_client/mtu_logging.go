@@ -4,9 +4,7 @@
 // Github: https://github.com/masterking32
 // Year: 2026
 // ==============================================================================
-// Package client provides the core logic for the MasterDnsVPN client.
-// This file (mtu_logging.go) handles logging for MTU testing.
-// ==============================================================================
+
 package client
 
 import (
@@ -88,33 +86,17 @@ func (c *Client) logMTUCompletion(validConns []Connection) {
 			conn.Domain,
 		)
 	}
-	c.log.Infof("%s", strings.Repeat("=", 80))
+	c.log.Infof("%s", strings.Repeat("-", 80))
 	c.log.Infof(
-		"<blue>Total valid resolvers after MTU testing: <cyan>%d</cyan> of <cyan>%d</cyan></blue>",
-		len(validConns),
-		len(c.connections),
+		"\U0001F4CF <green>Synced MTU Upload: <cyan>%d</cyan> Download: <cyan>%d</cyan> (Chars: <cyan>%d</cyan>)</green>",
+		c.syncedUploadMTU,
+		c.syncedDownloadMTU,
+		c.syncedUploadChars,
 	)
 	c.log.Infof(
-		"<blue>Note:</blue> Each packet will be sent <yellow>%d</yellow> times to improve reliability.",
-		c.cfg.PacketDuplicationCount,
-	)
-
-	c.log.Infof("%s", strings.Repeat("=", 80))
-	c.log.Infof(
-		"<cyan>[MTU RESULTS]</cyan> Max Upload MTU found: <yellow>%d</yellow> | Max Download MTU found: <yellow>%d</yellow>",
+		"\U0001F4CF <green>MTU Spread Max Upload: <cyan>%d</cyan> Max Download: <cyan>%d</cyan></green>",
 		maxFoundUpload,
 		maxFoundDownload,
-	)
-	c.log.Infof(
-		"<cyan>[MTU RESULTS]</cyan> Selected Synced Upload MTU: <yellow>%d</yellow> | Selected Synced Download MTU: <yellow>%d</yellow>",
-		c.syncedUploadMTU,
-		c.syncedDownloadMTU,
-	)
-	c.log.Infof("%s", strings.Repeat("=", 80))
-	c.log.Infof(
-		"<green>Global MTU Configuration -> Upload: <cyan>%d</cyan>, Download: <cyan>%d</cyan></green>",
-		c.syncedUploadMTU,
-		c.syncedDownloadMTU,
 	)
 }
 

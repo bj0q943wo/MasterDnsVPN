@@ -4,9 +4,7 @@
 // Github: https://github.com/masterking32
 // Year: 2026
 // ==============================================================================
-// Package client provides the core logic for the MasterDnsVPN client.
-// This file (mtu.go) handles MTU discovery and probing.
-// ==============================================================================
+
 package client
 
 import (
@@ -30,6 +28,7 @@ const (
 	mtuProbeCodeLength  = 4
 	mtuProbeRawResponse = 0
 	mtuProbeBase64Reply = 1
+	EDnsSafeUDPSize     = 4096
 	defaultMTUMinFloor  = 30
 	defaultUploadMaxCap = 512
 )
@@ -809,6 +808,7 @@ func fillMTUProbeBytesFast(dst []byte, seed uint64) {
 		}
 	}
 }
+
 
 func summarizeValidMTUConnections(connections []Connection) (validConns []Connection, minUpload int, minDownload int, minUploadChars int) {
 	validConns = make([]Connection, 0, len(connections))
