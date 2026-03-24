@@ -461,6 +461,7 @@ func (a *ARQ) MarkFinReceived() {
 	a.setState(StateHalfClosedRemote)
 	a.mu.Unlock()
 	a.halfCloseLocalWriter()
+	a.tryFinalizeRemoteEOF()
 }
 
 func (a *ARQ) markFinAcked() {
@@ -504,9 +505,16 @@ func (a *ARQ) clearWaitingAck(packetType uint8) {
 	}
 }
 
+func (a *ARQ) clearTrackedControlPacket(packetType uint8, sequenceNum uint16, fragmentID uint8) {
+	a.mu.Lock()
+	delete(a.controlSndBuf, uint32(packetType)<<24|uint32(sequenceNum)<<8|uint32(fragmentID))
+	a.mu.Unlock()
+}
+
 func (a *ARQ) tryFinalizeRemoteEOF() {
 	a.mu.Lock()
-	shouldClose := !a.closed && a.finReceived && a.finAcked
+	waitingForFinAck := a.waitingAck && a.waitingAckFor == Enums.PACKET_STREAM_FIN
+	shouldClose := !a.closed && a.finReceived && (a.finAcked || (a.finSent && !waitingForFinAck))
 	a.mu.Unlock()
 
 	if shouldClose {
@@ -1085,6 +1093,16 @@ func (a *ARQ) ReceiveControlAck(ackPacketType uint8, sequenceNum uint16, fragmen
 
 	key := uint32(originPtype)<<24 | uint32(sequenceNum)<<8 | uint32(fragmentID)
 	_, tracked := a.controlSndBuf[key]
+	_, isCloseStreamPacket := Enums.GetPacketCloseStream(originPtype)
+
+	if !tracked && isCloseStreamPacket {
+		for _, info := range a.controlSndBuf {
+			if info.PacketType == originPtype {
+				tracked = true
+				break
+			}
+		}
+	}
 
 	waitingFor := a.waitingAckFor
 	isWaitingFin := ackPacketType == Enums.PACKET_STREAM_FIN_ACK && waitingFor == Enums.PACKET_STREAM_FIN
@@ -1096,7 +1114,15 @@ func (a *ARQ) ReceiveControlAck(ackPacketType uint8, sequenceNum uint16, fragmen
 	}
 
 	if tracked {
-		delete(a.controlSndBuf, key)
+		if isCloseStreamPacket {
+			for trackedKey, info := range a.controlSndBuf {
+				if info.PacketType == originPtype {
+					delete(a.controlSndBuf, trackedKey)
+				}
+			}
+		} else {
+			delete(a.controlSndBuf, key)
+		}
 	}
 	a.mu.Unlock()
 
@@ -1206,9 +1232,20 @@ func (a *ARQ) handleTerminalRetransmitState(now time.Time) bool {
 	}
 
 	if a.waitingAck && !a.ackWaitDeadline.IsZero() && now.After(a.ackWaitDeadline) {
+		waitingFor := a.waitingAckFor
 		a.mu.Unlock()
-		a.finalizeClose("Terminal ACK wait timeout")
-		return true
+
+		if waitingFor == Enums.PACKET_STREAM_RST {
+			a.finalizeClose("Terminal ACK wait timeout")
+			return true
+		}
+
+		if waitingFor == Enums.PACKET_STREAM_FIN && a.finSeqSent != nil {
+			a.clearWaitingAck(Enums.PACKET_STREAM_FIN)
+			a.clearTrackedControlPacket(Enums.PACKET_STREAM_FIN, *a.finSeqSent, 0)
+		}
+
+		return false
 	}
 
 	if a.rstReceived && a.state != StateReset {
@@ -1261,9 +1298,18 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 				}
 			}
 
-			if now.Sub(info.CreatedAt) >= packetTTL || info.Retries >= maxRetries {
+			expiredByTTL := now.Sub(info.CreatedAt) >= packetTTL
+			exceededRetries := info.Retries >= maxRetries
+			if expiredByTTL || exceededRetries {
 				delete(a.controlSndBuf, key)
-				continue
+				reason := "Control packet expired"
+				if exceededRetries {
+					reason = "Control packet max retransmissions exceeded"
+				}
+				a.mu.Unlock()
+				a.handleTrackedPacketTTLExpiry(info.PacketType, reason)
+				a.mu.Lock()
+				return
 			}
 		}
 
