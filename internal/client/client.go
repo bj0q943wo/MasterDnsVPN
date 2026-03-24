@@ -312,7 +312,6 @@ func (c *Client) Run(ctx context.Context) error {
 				c.StopAsyncRuntime()
 				return nil
 			case <-time.After(1 * time.Second):
-				c.log.Infof("\U0001F517 <gray>Runtime loop active (MTU Success: %t, Session: %d)...</gray>", c.successMTUChecks, c.sessionID)
 			}
 		}
 	}

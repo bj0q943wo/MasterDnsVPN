@@ -18,7 +18,6 @@ import (
 	"masterdnsvpn-go/internal/arq"
 	"masterdnsvpn-go/internal/client/handlers"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
-	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 const (
@@ -85,8 +84,9 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 	if err != nil {
 		cancel()
 		c.asyncCancel = nil
-		return fmt.Errorf("failed to open high-performance tunnel socket: %w", err)
+		return fmt.Errorf("failed to open tunnel socket: %w", err)
 	}
+
 	c.tunnelConn = conn
 
 	c.log.Infof("\U0001F4E1 <cyan>Async Runtime Initialized: <green>%d Writes</green>, <green>%d Reads</green>, <green>%d Processors</green></cyan>",
@@ -352,31 +352,4 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 		c.log.Warnf("\U0001F6A8 <red>Handler execution failed: %v</red>", err)
 	}
 
-}
-
-// SendBurstPacket adds a packet to the transmission queue.
-func (c *Client) SendBurstPacket(conn Connection, payload []byte, packetType uint8) {
-	c.pingManager.NotifyPacket(packetType, false)
-
-	domain := conn.Domain
-	if domain == "" {
-		domain = c.cfg.Domains[0]
-	}
-
-	dnsPacket, err := c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
-		SessionID:     c.sessionID,
-		PacketType:    packetType,
-		SessionCookie: c.sessionCookie,
-		Payload:       payload,
-	})
-
-	if err != nil {
-		return
-	}
-
-	c.log.Debugf("📤 <yellow>Sending burst packet (Type: %d) to %s:%d</yellow>", packetType, conn.Resolver, conn.ResolverPort)
-	select {
-	case c.txChannel <- asyncPacket{conn: conn, payload: dnsPacket, packetType: packetType}:
-	default:
-	}
 }

@@ -855,9 +855,11 @@ func (c *Client) encodedCharsForPayload(payloadLen int) int {
 		CompressionType: 0xFF,
 		Payload:         payload,
 	}, c.codec)
+
 	if err != nil {
 		return 0
 	}
+
 	return len(encoded)
 }
 
@@ -865,6 +867,7 @@ func effectiveDownloadMTUProbeSize(downloadMTU int) int {
 	if downloadMTU <= 0 {
 		return 0
 	}
+
 	return downloadMTU + mtuDownResponseReserve
 }
 
@@ -872,13 +875,16 @@ func computeSafeUploadMTU(uploadMTU int, cryptoOverhead int) int {
 	if uploadMTU <= 0 {
 		return 0
 	}
+
 	safe := uploadMTU - cryptoOverhead
 	if safe < 64 {
 		safe = 64
 	}
+
 	if safe > uploadMTU {
 		return uploadMTU
 	}
+
 	return safe
 }
 

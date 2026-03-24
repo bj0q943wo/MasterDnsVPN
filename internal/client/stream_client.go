@@ -501,7 +501,7 @@ func (c *Client) InitVirtualStream0() {
 	c.active_streams[streamID] = s
 	a.Start()
 
-	c.log.Infof("🚀 <green>Virtual Stream 0 (Control Channel) Initialized.</green>")
+	c.log.Debugf("🚀 <green>Virtual Stream 0 (Control Channel) Initialized.</green>")
 }
 
 // CloseAllStreams completely flushes all ARQ bindings. For Stream 0, it calls ForceClose.
