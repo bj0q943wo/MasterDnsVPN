@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"time"
 
 	"masterdnsvpn-go/internal/compression"
@@ -28,9 +29,11 @@ var (
 )
 
 const (
-	sessionInitPayloadSize   = 10
-	sessionAcceptPayloadSize = 7
-	sessionBusyPayloadSize   = 4
+	sessionInitPayloadSize      = 10
+	sessionAcceptPayloadSize    = 7
+	sessionBusyPayloadSize      = 4
+	sessionCloseBurstMaxTargets = 10
+	sessionCloseBurstRounds     = 3
 )
 
 func (c *Client) InitializeSession(maxAttempts int) error {
@@ -227,6 +230,103 @@ func (c *Client) clearSessionResetPending() {
 	if c != nil {
 		c.sessionResetPending.Store(false)
 	}
+}
+
+func (c *Client) notifySessionCloseBurst(timeout time.Duration) {
+	if c == nil || !c.SessionReady() || c.sessionID == 0 {
+		return
+	}
+	if !c.sessionResetPending.CompareAndSwap(false, true) {
+		return
+	}
+
+	targets := c.selectSessionCloseTargets(sessionCloseBurstMaxTargets)
+	if len(targets) == 0 {
+		c.sessionResetPending.Store(false)
+		return
+	}
+
+	timeout = normalizeTimeout(timeout, time.Second)
+	deadline := time.Now().Add(timeout)
+
+	rounds := sessionCloseBurstRounds
+	if rounds < 1 {
+		rounds = 1
+	}
+	interval := timeout / time.Duration(rounds)
+	if interval <= 0 {
+		interval = timeout
+	}
+
+	for round := 0; round < rounds; round++ {
+		c.sendSessionCloseRound(targets, deadline)
+		if round == rounds-1 {
+			break
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		sleepFor := interval
+		if sleepFor > remaining {
+			sleepFor = remaining
+		}
+		time.Sleep(sleepFor)
+	}
+
+	if c.log != nil {
+		c.log.Debugf(
+			"\U0001F6AA <yellow>Client Session Close Burst Sent</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Targets</blue>: <cyan>%d</cyan>",
+			c.sessionID,
+			len(targets),
+		)
+	}
+}
+
+func (c *Client) selectSessionCloseTargets(maxTargets int) []Connection {
+	if c == nil {
+		return nil
+	}
+
+	if maxTargets < 1 {
+		maxTargets = 1
+	}
+
+	targets := c.balancer.GetUniqueConnections(maxTargets)
+	if len(targets) > 0 {
+		return targets
+	}
+
+	if best, ok := c.balancer.GetBestConnection(); ok {
+		return []Connection{best}
+	}
+	return nil
+}
+
+func (c *Client) sendSessionCloseRound(targets []Connection, deadline time.Time) {
+	if c == nil || len(targets) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, conn := range targets {
+		conn := conn
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			query, err := c.buildTunnelTXTQueryRaw(conn.Domain, VpnProto.BuildOptions{
+				SessionID:     c.sessionID,
+				SessionCookie: c.sessionCookie,
+				PacketType:    Enums.PACKET_SESSION_CLOSE,
+			})
+			if err != nil {
+				return
+			}
+			c.sendOneWayDNSQuery(conn, query, deadline)
+		}()
+	}
+	wg.Wait()
 }
 
 // applySyncedMTUState updates the client's internal MTU state after successful probing.

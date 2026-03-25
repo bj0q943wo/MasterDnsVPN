@@ -401,12 +401,8 @@ func (c *Client) CloseAllStreams() {
 	c.streamsMu.Unlock()
 
 	for _, s := range streams {
-		if a, ok := s.Stream.(*arq.ARQ); ok {
-			if s.StreamID == 0 {
-				a.Close("Session Reset (Virtual Stream 0 Force Destroy)", arq.CloseOptions{Force: true})
-			} else {
-				a.Close("Session Reset (All Streams Destroy)", arq.CloseOptions{Force: true})
-			}
+		if s != nil {
+			s.Close()
 		}
 	}
 

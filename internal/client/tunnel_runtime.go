@@ -58,6 +58,26 @@ func (c *Client) exchangeUDPQueryWithConn(conn *net.UDPConn, packet []byte, time
 	}
 }
 
+func (c *Client) sendOneWayDNSQuery(resolver Connection, packet []byte, deadline time.Time) error {
+	udpConn, err := c.getUDPConn(resolver.ResolverLabel)
+	if err != nil {
+		return err
+	}
+
+	if err := udpConn.SetWriteDeadline(deadline); err != nil {
+		_ = udpConn.Close()
+		return err
+	}
+
+	if _, err := udpConn.Write(packet); err != nil {
+		_ = udpConn.Close()
+		return err
+	}
+
+	c.putUDPConn(resolver.ResolverLabel, udpConn)
+	return nil
+}
+
 // getUDPConn retrieves a UDP connection from the pool for the specified resolver.
 // If no connection is available in the pool, it dials a new one.
 func (c *Client) getUDPConn(resolverLabel string) (*net.UDPConn, error) {
@@ -97,6 +117,31 @@ func (c *Client) putUDPConn(resolverLabel string, conn *net.UDPConn) {
 	case pool <- conn:
 	default:
 		_ = conn.Close()
+	}
+}
+
+func (c *Client) closeResolverConnPools() {
+	if c == nil {
+		return
+	}
+
+	c.resolverConnsMu.Lock()
+	pools := c.resolverConns
+	c.resolverConns = make(map[string]chan *net.UDPConn)
+	c.resolverConnsMu.Unlock()
+
+	for _, pool := range pools {
+		for {
+			select {
+			case conn := <-pool:
+				if conn != nil {
+					_ = conn.Close()
+				}
+			default:
+				goto nextPool
+			}
+		}
+	nextPool:
 	}
 }
 

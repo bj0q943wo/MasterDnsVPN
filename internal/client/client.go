@@ -293,22 +293,23 @@ func (c *Client) Run(ctx context.Context) error {
 				}
 				c.log.Infof("<green>✅ Session Initialized Successfully (ID: <cyan>%d</cyan>)</green>", c.sessionID)
 
-				// Create the infinite Virtual Stream 0
-				c.InitVirtualStream0()
-
-				// Start the asynchronous workers processing the raw pipeline
 				if err := c.StartAsyncRuntime(ctx); err != nil {
 					c.log.Errorf("<red>❌ Async Runtime failed to launch: %v</red>", err)
 					return err
 				}
 
-				// Start DNS Cache persistence loop if enabled
+				c.InitVirtualStream0()
+
+				if c.pingManager != nil {
+					c.pingManager.Start(ctx)
+				}
+
 				c.ensureLocalDNSCachePersistence(ctx)
 			}
 
-			// Placeholder for the rest of the runtime logic (session management, etc.)
 			select {
 			case <-ctx.Done():
+				c.notifySessionCloseBurst(time.Second)
 				c.StopAsyncRuntime()
 				return nil
 			case <-time.After(1 * time.Second):

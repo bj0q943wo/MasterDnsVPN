@@ -18,6 +18,7 @@ import (
 	"masterdnsvpn-go/internal/arq"
 	"masterdnsvpn-go/internal/client/handlers"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
+	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
 )
 
 const (
@@ -67,7 +68,50 @@ func (c *Client) StopAsyncRuntime() {
 		c.pingManager.Stop()
 	}
 
-	c.clearOrphanResets()
+	c.resetRuntimeBindings(false)
+}
+
+func (c *Client) resetRuntimeBindings(resetSession bool) {
+	if c == nil {
+		return
+	}
+
+	c.CloseAllStreams()
+
+	c.streamsMu.Lock()
+	c.last_stream_id = 0
+	c.streamsMu.Unlock()
+
+	c.dnsResponses = fragmentStore.New[dnsFragmentKey](128)
+	if c.localDNSCache != nil {
+		c.localDNSCache.ClearPending()
+	}
+
+	c.closeResolverConnPools()
+	c.clearTxSignal()
+	c.clearSessionResetPending()
+
+	if resetSession {
+		c.sessionReady = false
+		c.sessionID = 0
+		c.sessionCookie = 0
+		c.responseMode = 0
+		c.clearSessionInitBusyUntil()
+		c.resetSessionInitState()
+	}
+}
+
+func (c *Client) clearTxSignal() {
+	if c == nil || c.txSignal == nil {
+		return
+	}
+	for {
+		select {
+		case <-c.txSignal:
+		default:
+			return
+		}
+	}
 }
 
 // StartAsyncRuntime initializes the parallel system for tunnel I/O and processing.
@@ -141,9 +185,6 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 		<-runtimeCtx.Done()
 		conn.Close()
 	}()
-
-	// 10. Start Ping Manager (Autonomous adaptive pinging)
-	c.pingManager.Start(runtimeCtx)
 
 	return nil
 }
