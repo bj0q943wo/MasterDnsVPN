@@ -435,10 +435,9 @@ func (s *sessionStore) Cleanup(now time.Time, idleTimeout time.Duration, closedR
 		if record == nil {
 			continue
 		}
-		record.markClosed()
+
 		lastActivityUnixNano := record.lastActivity()
 		if lastActivityUnixNano != 0 && nowUnixNano-lastActivityUnixNano < idleTimeoutNanos {
-			record.reopen()
 			continue
 		}
 
@@ -454,6 +453,7 @@ func (s *sessionStore) Cleanup(now time.Time, idleTimeout time.Duration, closedR
 				ExpiresAt:    now.Add(closedRetention),
 			}
 		}
+		record.markClosed()
 		expired = append(expired, closedSessionCleanup{
 			ID:     uint8(sessionID),
 			record: record,

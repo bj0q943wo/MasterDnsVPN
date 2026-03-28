@@ -122,6 +122,33 @@ func TestSessionStoreCleanupReturnsExpiredRecordForFollowupCleanup(t *testing.T)
 	if _, ok := store.recentClosed[record.ID]; !ok {
 		t.Fatalf("expected expired session to be tracked in recentClosed")
 	}
+	if !record.isClosed() {
+		t.Fatal("expected expired record to be marked closed after cleanup removal")
+	}
+}
+
+func TestSessionStoreCleanupKeepsActiveRecordOpen(t *testing.T) {
+	store := newSessionStore(8, 32)
+	record := newTestSessionRecord(10)
+	record.Signature[0] = 2
+	record.Cookie = 88
+	record.ResponseMode = 1
+	record.setLastActivity(time.Now())
+
+	store.byID[record.ID] = record
+	store.bySig[record.Signature] = record.ID
+	store.activeCount = 1
+
+	expired := store.Cleanup(time.Now(), time.Minute, 10*time.Minute)
+	if len(expired) != 0 {
+		t.Fatalf("expected no expired sessions, got %d", len(expired))
+	}
+	if store.byID[record.ID] != record {
+		t.Fatal("expected active record to remain in active store")
+	}
+	if record.isClosed() {
+		t.Fatal("expected active record to remain open during cleanup scan")
+	}
 }
 
 func TestCleanupTerminalStreamsAbortsAndRemovesExpiredStreams(t *testing.T) {
