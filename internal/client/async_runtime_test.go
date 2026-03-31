@@ -230,6 +230,26 @@ func TestStartAsyncRuntime(t *testing.T) {
 	c.StopAsyncRuntime()
 }
 
+func TestStartAsyncRuntimeCleansUpOnListenerStartFailure(t *testing.T) {
+	c := createTestClient(t)
+	c.cfg.ListenIP = ""
+	c.cfg.ListenPort = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := c.StartAsyncRuntime(ctx)
+	if err == nil {
+		t.Fatal("expected StartAsyncRuntime to fail for invalid listener address")
+	}
+	if c.asyncCancel != nil {
+		t.Fatal("expected asyncCancel to be cleared after startup failure")
+	}
+	if c.tunnelConn != nil {
+		t.Fatal("expected tunnelConn to be closed after startup failure")
+	}
+}
+
 func TestStartAsyncRuntimeCollectsResolverTimeoutsEvenWhenHealthFeaturesDisabled(t *testing.T) {
 	c := createTestClient(t)
 	c.cfg.ListenIP = "127.0.0.1"

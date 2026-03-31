@@ -238,6 +238,27 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 	// 2. Setup session context.
 	runtimeCtx, cancel := context.WithCancel(parentCtx)
 	c.asyncCancel = cancel
+	started := false
+	defer func() {
+		if started {
+			return
+		}
+		cancel()
+		if c.tcpListener != nil {
+			c.tcpListener.Stop()
+			c.tcpListener = nil
+		}
+		if c.dnsListener != nil {
+			c.dnsListener.Stop()
+			c.dnsListener = nil
+		}
+		if c.tunnelConn != nil {
+			_ = c.tunnelConn.Close()
+			c.tunnelConn = nil
+		}
+		c.asyncCancel = nil
+		c.resetRuntimeBindings(false)
+	}()
 
 	// 3. Open shared UDP socket.
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
@@ -311,6 +332,7 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 		conn.Close()
 	}()
 
+	started = true
 	return nil
 }
 
