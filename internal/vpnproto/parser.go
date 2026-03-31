@@ -89,7 +89,7 @@ func ParseFromLabels(labels string, codec *security.Codec) (Packet, error) {
 		return Packet{}, ErrInvalidEncodedData
 	}
 
-	raw, err := codec.DecodeLowerBase36StringAndDecrypt(labels)
+	raw, err := codec.DecodeLowerBase32StringAndDecrypt(labels)
 	if err != nil {
 		return Packet{}, err
 	}
