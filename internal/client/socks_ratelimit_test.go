@@ -66,6 +66,21 @@ func TestSocksRateLimiterEmptyIPNotBlocked(t *testing.T) {
 	}
 }
 
+func TestSocksRateLimiterLoopbackNeverBanned(t *testing.T) {
+	rl := newSocksRateLimiter()
+
+	for _, ip := range []string{"127.0.0.1", "::1"} {
+		for i := 0; i < socksRateLimitMaxFailures+2; i++ {
+			if rl.RecordFailure(ip) {
+				t.Fatalf("loopback IP %s should never trigger ban", ip)
+			}
+		}
+		if rl.IsBlocked(ip) {
+			t.Fatalf("loopback IP %s should never be blocked", ip)
+		}
+	}
+}
+
 func TestSocksRateLimiterBanDecayResetsEscalation(t *testing.T) {
 	rl := newSocksRateLimiter()
 	ip := "10.0.0.50"

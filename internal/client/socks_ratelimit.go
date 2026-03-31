@@ -62,6 +62,11 @@ func newSocksRateLimiter() *socksRateLimiter {
 	}
 }
 
+func isLoopbackIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
 // extractIP returns the bare IP address string from a net.Conn, stripping the port.
 func extractIP(conn net.Conn) string {
 	if conn == nil {
@@ -81,7 +86,7 @@ func extractIP(conn net.Conn) string {
 // IsBlocked returns true if the given IP is currently banned due to excessive
 // authentication failures. Safe for concurrent use.
 func (r *socksRateLimiter) IsBlocked(ip string) bool {
-	if ip == "" {
+	if ip == "" || isLoopbackIP(ip) {
 		return false
 	}
 	r.mu.Lock()
@@ -102,7 +107,7 @@ func (r *socksRateLimiter) IsBlocked(ip string) bool {
 // banned for an escalating duration.
 // Returns true if the IP is now banned as a result of this failure.
 func (r *socksRateLimiter) RecordFailure(ip string) bool {
-	if ip == "" {
+	if ip == "" || isLoopbackIP(ip) {
 		return false
 	}
 	now := time.Now()
