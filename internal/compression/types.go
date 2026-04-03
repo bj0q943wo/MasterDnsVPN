@@ -239,8 +239,7 @@ func compressZSTD(data []byte) ([]byte, error) {
 	encoder := zstdEncoderPool.Get().(*zstd.Encoder)
 	defer zstdEncoderPool.Put(encoder)
 
-	// Pre-allocate output buffer sized for typical compression ratio.
-	out := encoder.EncodeAll(data, make([]byte, 0, len(data)))
+	out := encoder.EncodeAll(data, nil)
 	return out, nil
 }
 
