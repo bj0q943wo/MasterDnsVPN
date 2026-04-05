@@ -44,7 +44,6 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		case <-ctx.Done():
 			return false
 		case <-c.txSignal:
-		case <-c.txSpaceSignal:
 		case <-idleTimer.C:
 		}
 		if !idleTimer.Stop() {
@@ -232,9 +231,6 @@ dispatchLoop:
 					})
 				}
 			}
-			if !waitForWork() {
-				return
-			}
 			continue dispatchLoop
 		}
 
@@ -272,10 +268,6 @@ dispatchLoop:
 			(item.PacketType == Enums.PACKET_STREAM_DATA || item.PacketType == Enums.PACKET_STREAM_RESEND) &&
 			!c.shouldTransmitQueuedStreamPacket(selected, item) {
 			selected.ReleaseTXPacket(item)
-			select {
-			case c.txSignal <- struct{}{}:
-			default:
-			}
 			continue dispatchLoop
 		}
 
@@ -426,11 +418,6 @@ dispatchLoop:
 				selected.ReleaseTXPacket(item)
 			}
 			return
-		}
-
-		select {
-		case c.txSignal <- struct{}{}:
-		default:
 		}
 	}
 }
