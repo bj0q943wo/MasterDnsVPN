@@ -55,6 +55,14 @@ func (c *Client) resolverHealthDebugEnabled() bool {
 	return c != nil && c.log != nil && c.log.Enabled(logger.LevelDebug)
 }
 
+func (c *Client) activeResolverCount() int {
+	if c == nil || c.balancer == nil {
+		return 0
+	}
+
+	return c.balancer.ValidCount()
+}
+
 func (c *Client) initResolverRecheckMeta() {
 	if c == nil {
 		return
@@ -400,9 +408,10 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	c.balancer.ResetServerStats(serverKey)
 	if c.log != nil {
 		c.log.Warnf(
-			"\U0001F6D1 <yellow>DNS server <cyan>%s</cyan> disabled due to: <red>%s</red></yellow>",
+			"\U0001F6D1 <yellow>DNS server <cyan>%s</cyan> disabled due to: <red>%s</red></yellow> <magenta>|</magenta> <blue>Active Resolvers</blue>: <cyan>%d</cyan>",
 			conn.ResolverLabel,
 			cause,
+			c.activeResolverCount(),
 		)
 	}
 	c.appendMTURemovedServerLine(&conn, cause)
@@ -473,8 +482,9 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 	c.balancer.SeedConservativeStats(serverKey)
 	if c.log != nil {
 		c.log.Infof(
-			"\U0001F504 <green>DNS server <cyan>%s</cyan> re-activated after successful recheck.</green>",
+			"\U0001F504 <green>DNS server <cyan>%s</cyan> re-activated after successful recheck.</green> <magenta>|</magenta> <blue>Active Resolvers</blue>: <cyan>%d</cyan>",
 			conn.ResolverLabel,
+			c.activeResolverCount(),
 		)
 	}
 	c.appendMTUAddedServerLine(&conn)
