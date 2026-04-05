@@ -159,15 +159,20 @@ func TestTrackResolverSendBoundsResolverPendingGrowth(t *testing.T) {
 func TestDrainQueues(t *testing.T) {
 	c := createTestClient(t)
 	c.txChannel = make(chan rawOutboundTask, 5)
+	c.encodedTXChannel = make(chan encodedOutboundTask, 5)
 	c.rxChannel = make(chan asyncReadPacket, 5)
 
 	c.txChannel <- rawOutboundTask{}
+	c.encodedTXChannel <- encodedOutboundTask{}
 	c.rxChannel <- asyncReadPacket{data: make([]byte, 10)}
 
 	c.drainQueues()
 
 	if len(c.txChannel) != 0 {
 		t.Errorf("expected txChannel empty, got %d", len(c.txChannel))
+	}
+	if len(c.encodedTXChannel) != 0 {
+		t.Errorf("expected encodedTXChannel empty, got %d", len(c.encodedTXChannel))
 	}
 	if len(c.rxChannel) != 0 {
 		t.Errorf("expected rxChannel empty, got %d", len(c.rxChannel))

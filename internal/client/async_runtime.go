@@ -296,21 +296,27 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 		go c.asyncProcessorWorker(runtimeCtx, i)
 	}
 
-	// 6. Spawn Writer Workers (Burst transmission)
+	// 6. Spawn Encoder Workers (packet build stage)
+	for i := 0; i < c.tunnelRX_TX_Workers; i++ {
+		c.asyncWG.Add(1)
+		go c.asyncEncodeWorker(runtimeCtx, i)
+	}
+
+	// 7. Spawn Writer Workers (UDP send stage)
 	for i := 0; i < c.tunnelRX_TX_Workers; i++ {
 		c.asyncWG.Add(1)
 		go c.asyncWriterWorker(runtimeCtx, i, conns[i])
 	}
 
-	// 7. Spawn Dispatcher (Fair Queuing & Packing)
+	// 8. Spawn Dispatcher (Fair Queuing & Packing)
 	c.asyncWG.Add(1)
 	go c.asyncStreamDispatcher(runtimeCtx)
 
-	// 8. Stream lifecycle cleanup.
+	// 9. Stream lifecycle cleanup.
 	c.asyncWG.Add(1)
 	go c.asyncStreamCleanupWorker(runtimeCtx)
 
-	// 9. Resolver timeout/health runtime.
+	// 10. Resolver timeout/health runtime.
 	// Keep this loop always running so resolver timeout samples are still pruned
 	// even when auto-disable and background recheck are disabled.
 	c.asyncWG.Add(1)
@@ -418,6 +424,17 @@ func (c *Client) drainQueues() {
 				task.selected.ReleaseTXPacket(task.item)
 			}
 		default:
+			goto drainEncoded
+		}
+	}
+drainEncoded:
+	for {
+		select {
+		case task := <-c.encodedTXChannel:
+			if !task.wasPacked && task.selected != nil && task.item != nil {
+				task.selected.ReleaseTXPacket(task.item)
+			}
+		default:
 			goto drainRX
 		}
 	}
@@ -447,11 +464,10 @@ func (c *Client) closeTunnelSockets() {
 	c.tunnelConns = nil
 }
 
-// asyncWriterWorker encodes, builds DNS questions, and writes packets to the destination.
-func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPConn) {
+// asyncEncodeWorker turns raw outbound tasks into ready-to-send DNS packets.
+func (c *Client) asyncEncodeWorker(ctx context.Context, id int) {
 	defer c.asyncWG.Done()
-	c.log.Debugf("\U0001F680 <green>Writer Worker <cyan>#%d</cyan> started</green>", id)
-	var lastDeadline time.Time
+	c.log.Debugf("\U0001F9E9 <green>Encode Worker <cyan>#%d</cyan> started</green>", id)
 	defaultDomain := ""
 	if len(c.cfg.Domains) > 0 {
 		defaultDomain = c.cfg.Domains[0]
@@ -459,15 +475,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 
 	var packetByDomain map[string][]byte
 	var preparedDomainByName map[string]preparedTunnelDomain
-	localAddr := ""
-	if conn != nil && conn.LocalAddr() != nil {
-		localAddr = conn.LocalAddr().String()
-	}
-
-	refreshWindow := c.tunnelPacketTimeout / 2
-	if refreshWindow < 250*time.Millisecond {
-		refreshWindow = 250 * time.Millisecond
-	}
+	var frames []encodedOutboundDatagram
 	for {
 		select {
 		case <-ctx.Done():
@@ -478,8 +486,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 				return
 			}
 
-			conns := task.conns
-			if len(conns) == 0 {
+			if len(task.conns) == 0 {
 				if !task.wasPacked && task.selected != nil {
 					task.selected.ReleaseTXPacket(task.item)
 				}
@@ -504,8 +511,9 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 			if preparedDomainByName != nil {
 				clear(preparedDomainByName)
 			}
+			frames = frames[:0]
 
-			for _, resolverConn := range conns {
+			for _, resolverConn := range task.conns {
 				domain := resolverConn.Domain
 				if domain == "" {
 					domain = defaultDomain
@@ -523,7 +531,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 						continue
 					}
 					if preparedDomainByName == nil {
-						preparedDomainByName = make(map[string]preparedTunnelDomain, len(conns))
+						preparedDomainByName = make(map[string]preparedTunnelDomain, len(task.conns))
 					}
 					preparedDomainByName[domain] = prepared
 				}
@@ -541,7 +549,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 					dnsPacket = firstDNSPacket
 				default:
 					if packetByDomain == nil {
-						packetByDomain = make(map[string][]byte, len(conns)-1)
+						packetByDomain = make(map[string][]byte, len(task.conns)-1)
 					}
 					var cached bool
 					dnsPacket, cached = packetByDomain[domain]
@@ -554,19 +562,75 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 					}
 				}
 
-				now := time.Now()
-				if c.tunnelPacketTimeout > 0 {
-					if lastDeadline.IsZero() || now.Add(refreshWindow).After(lastDeadline) {
-						lastDeadline = now.Add(c.tunnelPacketTimeout)
-						_ = conn.SetWriteDeadline(lastDeadline)
-					}
-				}
-
-				if _, err := conn.WriteToUDP(dnsPacket, addr); err == nil {
-					c.trackResolverSend(dnsPacket, addr.String(), localAddr, resolverConn.Key, now)
-				}
+				frames = append(frames, encodedOutboundDatagram{
+					addr:      addr,
+					serverKey: resolverConn.Key,
+					packet:    dnsPacket,
+				})
 			}
 
+			if len(frames) == 0 {
+				if !task.wasPacked && task.selected != nil {
+					task.selected.ReleaseTXPacket(task.item)
+				}
+				continue
+			}
+
+			encodedTask := encodedOutboundTask{
+				wasPacked: task.wasPacked,
+				item:      task.item,
+				selected:  task.selected,
+				frames:    append([]encodedOutboundDatagram(nil), frames...),
+			}
+
+			select {
+			case c.encodedTXChannel <- encodedTask:
+			case <-ctx.Done():
+				if !task.wasPacked && task.selected != nil {
+					task.selected.ReleaseTXPacket(task.item)
+				}
+				return
+			}
+		}
+	}
+}
+
+// asyncWriterWorker sends already-built DNS packets on the assigned socket.
+func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPConn) {
+	defer c.asyncWG.Done()
+	c.log.Debugf("\U0001F680 <green>Writer Worker <cyan>#%d</cyan> started</green>", id)
+	var lastDeadline time.Time
+	localAddr := ""
+	if conn != nil && conn.LocalAddr() != nil {
+		localAddr = conn.LocalAddr().String()
+	}
+	refreshWindow := c.tunnelPacketTimeout / 2
+	if refreshWindow < 250*time.Millisecond {
+		refreshWindow = 250 * time.Millisecond
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task, ok := <-c.encodedTXChannel:
+			if !ok {
+				return
+			}
+			now := time.Now()
+			if c.tunnelPacketTimeout > 0 {
+				if lastDeadline.IsZero() || now.Add(refreshWindow).After(lastDeadline) {
+					lastDeadline = now.Add(c.tunnelPacketTimeout)
+					_ = conn.SetWriteDeadline(lastDeadline)
+				}
+			}
+			for _, frame := range task.frames {
+				if frame.addr == nil || len(frame.packet) == 0 {
+					continue
+				}
+				if _, err := conn.WriteToUDP(frame.packet, frame.addr); err == nil {
+					c.trackResolverSend(frame.packet, frame.addr.String(), localAddr, frame.serverKey, now)
+				}
+			}
 			if !task.wasPacked && task.selected != nil {
 				task.selected.ReleaseTXPacket(task.item)
 			}
