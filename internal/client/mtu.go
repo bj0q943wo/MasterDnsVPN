@@ -165,6 +165,15 @@ func (c *Client) runResolverHealthLoop(ctx context.Context) {
 		default:
 		}
 
+		c.balancer.CollectExpiredResolverTimeouts(
+			c.now(),
+			c.tunnelPacketTimeout,
+			c.autoDisableCheckInterval(),
+			c.autoDisableTimeoutWindow(),
+			c.autoDisableMinObservations(),
+			c.cfg.AutoDisableTimeoutServers,
+		)
+
 		if c.cfg.RecheckInactiveServersEnabled {
 			c.runResolverHealthBatch(ctx, recheckInterval, parallelism)
 		}
