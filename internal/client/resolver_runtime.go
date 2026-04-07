@@ -24,15 +24,15 @@ type ResolverRuntime struct {
 	keyToIndex map[string]int
 	balancer   *Balancer
 
-	healthMu           sync.RWMutex
-	health             map[string]*resolverHealthState
-	recheck            map[string]resolverRecheckState
-	runtimeDisabled    map[string]resolverDisabledState
-	recheckSem         chan struct{}
-	streamMu           sync.RWMutex
-	streamRoutes       map[uint16]*streamRouteState
-	failoverThreshold  int
-	failoverCooldown   time.Duration
+	healthMu          sync.RWMutex
+	health            map[string]*resolverHealthState
+	recheck           map[string]resolverRecheckState
+	runtimeDisabled   map[string]resolverDisabledState
+	recheckSem        chan struct{}
+	streamMu          sync.RWMutex
+	streamRoutes      map[uint16]*streamRouteState
+	failoverThreshold int
+	failoverCooldown  time.Duration
 }
 
 func NewResolverRuntime(balancer *Balancer, recheckBatchSize int, failoverThreshold int, failoverCooldown time.Duration) *ResolverRuntime {
@@ -84,6 +84,7 @@ func (r *ResolverRuntime) LoadConnections(connections []Connection) {
 		for i := range connections {
 			pointers[i] = &connections[i]
 		}
+
 		r.balancer.SetConnections(pointers)
 	}
 }

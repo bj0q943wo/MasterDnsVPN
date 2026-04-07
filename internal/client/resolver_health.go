@@ -59,7 +59,7 @@ func (c *Client) activeResolverCount() int {
 		return 0
 	}
 
-	return c.balancer.ValidCount()
+	return c.balancer.ActiveCount()
 }
 
 func (c *Client) initResolverRecheckMeta() {
@@ -77,12 +77,12 @@ func (c *Client) initResolverRecheckMeta() {
 	c.runtime.healthMu.Lock()
 	defer c.runtime.healthMu.Unlock()
 
-	c.runtime.health = make(map[string]*resolverHealthState, len(c.connections))
-	c.runtime.recheck = make(map[string]resolverRecheckState, len(c.connections))
+	allConns := c.balancer.GetAllConnections()
+	c.runtime.health = make(map[string]*resolverHealthState, len(allConns))
+	c.runtime.recheck = make(map[string]resolverRecheckState, len(allConns))
 	c.runtime.runtimeDisabled = make(map[string]resolverDisabledState)
 
-	for idx := range c.connections {
-		conn := &c.connections[idx]
+	for _, conn := range allConns {
 		if conn.Key == "" {
 			continue
 		}
@@ -201,13 +201,13 @@ func (c *Client) retractResolverTimeoutEvent(serverKey string, timedOutAt time.T
 }
 
 func (c *Client) runResolverAutoDisable(now time.Time) {
-	if c == nil || !c.cfg.AutoDisableTimeoutServers || c.balancer.ValidCount() <= 3 {
+	if c == nil || !c.cfg.AutoDisableTimeoutServers || c.balancer.ActiveCount() <= 3 {
 		return
 	}
 
 	window := c.autoDisableTimeoutWindow()
 	debugEnabled := c.resolverHealthDebugEnabled()
-	candidates := make([]resolverAutoDisableCandidate, 0, len(c.connections))
+	candidates := make([]resolverAutoDisableCandidate, 0, c.balancer.ConnectionCount())
 	snap := c.resolverHealthBalancerSnapshot()
 	c.runtime.healthMu.Lock()
 	for key, state := range c.runtime.health {
@@ -253,7 +253,7 @@ func (c *Client) runResolverAutoDisable(now time.Time) {
 	}
 
 	for _, candidate := range candidates {
-		if c.balancer.ValidCount() <= 3 {
+		if c.balancer.ActiveCount() <= 3 {
 			return
 		}
 		c.disableResolverConnection(candidate.key, "100% timeout window")
@@ -285,7 +285,7 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 		return false
 	}
 	conn, ok := c.GetConnectionByKey(serverKey)
-	if !ok || !conn.IsValid || c.balancer.ValidCount() <= 3 {
+	if !ok || !conn.IsValid || c.balancer.ActiveCount() <= 3 {
 		return false
 	}
 	now := c.now()
@@ -368,7 +368,7 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 	delete(c.runtime.health, serverKey)
 	c.runtime.recheck[serverKey] = resolverRecheckState{}
 	// Periodically prune runtimeDisabled entries for connections no longer tracked
-	if len(c.runtime.runtimeDisabled) > len(c.connections) {
+	if len(c.runtime.runtimeDisabled) > c.balancer.ConnectionCount() {
 		for k := range c.runtime.runtimeDisabled {
 			if c.connectionPtrByKey(k) == nil {
 				delete(c.runtime.runtimeDisabled, k)
@@ -576,7 +576,7 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []resolverRecheckCand
 	defer c.runtime.healthMu.RUnlock()
 
 	runtimeCandidates := make([]resolverRecheckCandidate, 0, len(c.runtime.runtimeDisabled))
-	normalCandidates := make([]resolverRecheckCandidate, 0, len(c.connections))
+	normalCandidates := make([]resolverRecheckCandidate, 0, c.balancer.ConnectionCount())
 	for key, meta := range c.runtime.recheck {
 		conn, ok := c.GetConnectionByKey(key)
 		if !ok || conn.IsValid || meta.InFlight {

@@ -19,7 +19,7 @@ func (r *ResolverRuntime) SelectTargetsForPacketCount(c *Client, packetType uint
 		targetCount = 1
 	}
 
-	if c == nil || r == nil || r.balancer == nil || streamID == 0 || r.balancer.ValidCount() <= 0 {
+	if c == nil || r == nil || r.balancer == nil || streamID == 0 || r.balancer.ActiveCount() <= 0 {
 		return r.selectUniqueConnections(c, targetCount)
 	}
 
