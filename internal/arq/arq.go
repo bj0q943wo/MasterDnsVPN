@@ -1100,6 +1100,15 @@ func (a *ARQ) ioLoop() {
 	var transientReadSince time.Time
 
 	buf := make([]byte, max(a.mtu, 1))
+	ioReadyTimer := time.NewTimer(100 * time.Millisecond)
+	defer func() {
+		if !ioReadyTimer.Stop() {
+			select {
+			case <-ioReadyTimer.C:
+			default:
+			}
+		}
+	}()
 
 	for !a.isClosed() {
 		a.waitWindowNotFull()
@@ -1113,10 +1122,17 @@ func (a *ARQ) ioLoop() {
 
 		if !a.ioReady {
 			a.mu.Unlock()
+			if !ioReadyTimer.Stop() {
+				select {
+				case <-ioReadyTimer.C:
+				default:
+				}
+			}
+			ioReadyTimer.Reset(100 * time.Millisecond)
 			select {
 			case <-a.ctx.Done():
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-ioReadyTimer.C:
 				continue
 			}
 		}
