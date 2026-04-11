@@ -357,10 +357,27 @@ func (s *Server) tryBeginDeferredPacket(packet VpnProto.Packet) bool {
 	if s.deferredInflight == nil {
 		s.deferredInflight = make(map[uint64]struct{}, 128)
 	}
+	if s.deferredInflightIndex == nil {
+		s.deferredInflightIndex = make(map[uint8]map[uint16]map[uint64]struct{}, 64)
+	}
 	if _, exists := s.deferredInflight[key]; exists {
 		return false
 	}
 	s.deferredInflight[key] = struct{}{}
+
+	sessionID := packet.SessionID
+	streamID := packet.StreamID
+	sessionMap, exists := s.deferredInflightIndex[sessionID]
+	if !exists {
+		sessionMap = make(map[uint16]map[uint64]struct{}, 16)
+		s.deferredInflightIndex[sessionID] = sessionMap
+	}
+	streamMap, exists := sessionMap[streamID]
+	if !exists {
+		streamMap = make(map[uint64]struct{}, 8)
+		sessionMap[streamID] = streamMap
+	}
+	streamMap[key] = struct{}{}
 	return true
 }
 
@@ -371,6 +388,7 @@ func (s *Server) finishDeferredPacket(packet VpnProto.Packet) {
 	key := deferredTrackedPacketKey(packet)
 	s.deferredInflightMu.Lock()
 	delete(s.deferredInflight, key)
+	s.removeDeferredInflightIndexLocked(packet.SessionID, packet.StreamID, key)
 	s.deferredInflightMu.Unlock()
 }
 
@@ -397,11 +415,7 @@ func (s *Server) clearDeferredInflightForSession(sessionID uint8) {
 		return
 	}
 	s.deferredInflightMu.Lock()
-	for key := range s.deferredInflight {
-		if uint8(key>>48) == sessionID {
-			delete(s.deferredInflight, key)
-		}
-	}
+	s.clearDeferredInflightForSessionLocked(sessionID)
 	s.deferredInflightMu.Unlock()
 }
 
@@ -436,12 +450,85 @@ func (s *Server) clearDeferredInflightForStream(sessionID uint8, streamID uint16
 		return
 	}
 	s.deferredInflightMu.Lock()
-	for key := range s.deferredInflight {
-		if uint8(key>>48) == sessionID && uint16(key>>32) == streamID {
+	s.clearDeferredInflightForStreamLocked(sessionID, streamID)
+	s.deferredInflightMu.Unlock()
+}
+
+func (s *Server) clearDeferredInflightForSessionLocked(sessionID uint8) {
+	if s == nil || sessionID == 0 {
+		return
+	}
+	if s.deferredInflightIndex == nil {
+		for key := range s.deferredInflight {
+			if uint8(key>>48) == sessionID {
+				delete(s.deferredInflight, key)
+			}
+		}
+		return
+	}
+
+	sessionMap, exists := s.deferredInflightIndex[sessionID]
+	if !exists {
+		return
+	}
+	for _, streamMap := range sessionMap {
+		for key := range streamMap {
 			delete(s.deferredInflight, key)
 		}
 	}
-	s.deferredInflightMu.Unlock()
+	delete(s.deferredInflightIndex, sessionID)
+}
+
+func (s *Server) clearDeferredInflightForStreamLocked(sessionID uint8, streamID uint16) {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	if s.deferredInflightIndex == nil {
+		for key := range s.deferredInflight {
+			if uint8(key>>48) == sessionID && uint16(key>>32) == streamID {
+				delete(s.deferredInflight, key)
+			}
+		}
+		return
+	}
+
+	sessionMap, exists := s.deferredInflightIndex[sessionID]
+	if !exists {
+		return
+	}
+	streamMap, exists := sessionMap[streamID]
+	if !exists {
+		return
+	}
+	for key := range streamMap {
+		delete(s.deferredInflight, key)
+	}
+	delete(sessionMap, streamID)
+	if len(sessionMap) == 0 {
+		delete(s.deferredInflightIndex, sessionID)
+	}
+}
+
+func (s *Server) removeDeferredInflightIndexLocked(sessionID uint8, streamID uint16, key uint64) {
+	if s == nil || sessionID == 0 || streamID == 0 || s.deferredInflightIndex == nil {
+		return
+	}
+	sessionMap, exists := s.deferredInflightIndex[sessionID]
+	if !exists {
+		return
+	}
+	streamMap, exists := sessionMap[streamID]
+	if !exists {
+		return
+	}
+	delete(streamMap, key)
+	if len(streamMap) > 0 {
+		return
+	}
+	delete(sessionMap, streamID)
+	if len(sessionMap) == 0 {
+		delete(s.deferredInflightIndex, sessionID)
+	}
 }
 
 func (s *Server) shouldExecuteDeferredPacket(packet VpnProto.Packet) bool {

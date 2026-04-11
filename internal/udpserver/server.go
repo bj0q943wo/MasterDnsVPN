@@ -74,6 +74,7 @@ type Server struct {
 	packetPool               sync.Pool
 	deferredInflightMu       sync.Mutex
 	deferredInflight         map[uint64]struct{}
+	deferredInflightIndex    map[uint8]map[uint16]map[uint64]struct{}
 	immediateConnectedLog    throttledLogState
 	invalidSessionDropLog    throttledLogState
 	droppedPackets           atomic.Uint64
@@ -162,7 +163,8 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 				return make([]byte, mtuProbeMaxDownSize)
 			},
 		},
-		deferredInflight: make(map[uint64]struct{}, 128),
+		deferredInflight:      make(map[uint64]struct{}, 128),
+		deferredInflightIndex: make(map[uint8]map[uint16]map[uint64]struct{}, 64),
 		packetPool: sync.Pool{
 			New: func() any {
 				return make([]byte, cfg.MaxPacketSize)
