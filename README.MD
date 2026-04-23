@@ -811,6 +811,9 @@ You can review these related projects here:
 - [MasterDnsWeb (Web Management Client)](https://github.com/abolix/MasterDnsWeb)
   A web-based management client for MasterDnsVPN, designed to make it easy to manage one or multiple instances at the same time. Developed independently by Abolix.
 
+- [KevinNet DNS](https://github.com/kamalalhagh/kevinnet-dns)
+  A companion tool for MasterDnsVPN that discovers and validates working DNS resolvers, especially for users in Iran. It generates ready-to-use configuration files and performs end-to-end tunnel verification. This project is developed independently by Kevin Haji.
+
 ---
 
 ### Section 5.2: Fixing Port 53 Already in Use (Linux Server) 🛑

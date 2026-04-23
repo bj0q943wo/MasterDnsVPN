@@ -796,6 +796,9 @@ MTU_TEST_TIMEOUT = 1.0
 - [MasterDnsWeb (کلاینت مدیریت تحت وب)](https://github.com/abolix/MasterDnsWeb)
 > یک پروژه تحت وب برای مدیریت آسان MasterDnsVPN و مدیریت هم‌زمان یک یا چندین Instance. این پروژه به‌صورت مستقل توسط Abolix توسعه داده شده است.
 
+- [KevinNet DNS](https://github.com/kamalalhagh/kevinnet-dns)
+> ابزاری برای پیدا کردن و بررسی DNS Resolverهای فعال برای MasterDnsVPN، مخصوصاً برای کاربران داخل ایران. این ابزار کانفیگ‌های آماده استفاده تولید می‌کند و اتصال را به‌صورت کامل (End-to-End) تست می‌کند. این پروژه به‌صورت مستقل توسط Kevin Haji توسعه داده شده است.
+
 ---
 
 ### بخش ۵.۲: رفع مشکل اشغال بودن پورت ۵۳ (در سرور لینوکس) 🛑
