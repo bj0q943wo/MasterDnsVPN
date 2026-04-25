@@ -3,6 +3,10 @@
 ## | [نسخه فارسی](https://github.com/masterking32/MasterDnsVPN/blob/main/README_FA.MD) | [English Version](https://github.com/masterking32/MasterDnsVPN/blob/main/README.MD) |
 
 > **Personal fork note:** I'm using this project to learn DNS tunneling techniques. My fork may include small experiments and notes as I work through the codebase.
+>
+> **Study notes so far:**
+> - The ARQ (Automatic Repeat reQuest) layer is what gives MasterDnsVPN its stability edge over DNSTT under packet loss.
+> - The ~5–7B header overhead is achieved by encoding session/sequence info very compactly — worth digging into the packet framing code.
 
 **MasterDnsVPN** is a scientific and research-oriented project for carrying TCP traffic through DNS queries and responses. In broad goal, it is similar to projects such as DNSTT or SlipStream, but it follows a fundamentally different structure and implementation approach.
 This system is designed around compatibility with many resolver behaviors and harsh network conditions, with the goal of preserving the highest possible stability and data delivery even in the worst cases.
@@ -30,7 +34,4 @@ This system is designed around compatibility with many resolver behaviors and ha
 | Built-in balancer | 🔴 | ❌ | 🟢 (8 built-in balancing modes) |
 | Duplication system | ❌ | ❌ | Yes — increases traffic to improve reliability (configurable or can be disabled) |
 | MTU tolerance | Better than DNSTT | - | Works even with very small MTU because protocol overhead is very low |
-| Failover system | ❌ | ❌ | ✅ |
-| Download speed 10MB (Local) | 🟡 0.978s | 🔴 2.492s | 🟢 0.270s |
-| Upload speed 10MB (Local) | 🟡 3.249s | 🔴 16.207s | 🟢 1.746s |
-| Reso
+| 
