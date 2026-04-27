@@ -35,6 +35,8 @@ DATA_ENCRYPTION_METHOD = 2
 # Required on the client.
 # Must match the server-side key file contents.
 # Personal note: generate a strong key with: openssl rand -hex 32
+# Personal note: I keep my actual key in a separate secrets file and paste it
+# here only when testing locally — never commit a real key to git!
 ENCRYPTION_KEY = ""
 
 # ------------------------------------------------------------------------------
@@ -62,6 +64,9 @@ LISTEN_PORT = 18080
 
 # Local SOCKS5 authentication.
 # This protects the local proxy itself, not the remote server.
+# Personal note: keeping SOCKS5_AUTH = false is fine for single-user localhost
+# setups, but if you ever bind to 0.0.0.0 remember to flip this to true and
+# change the default credentials below!
 SOCKS5_AUTH = false
 SOCKS5_USER = "master_dns_vpn"
 SOCKS5_PASS = "master_dns_vpn"
@@ -71,8 +76,4 @@ SOCKS5_PASS = "master_dns_vpn"
 # What this section does:
 # - Controls the optional built-in local DNS listener.
 # - Controls local DNS cache size, TTL, pending timeout, and fragment assembly.
-# ------------------------------------------------------------------------------
-
-# When true, the client exposes a local DNS server on LOCAL_DNS_IP:LOCAL_DNS_PORT.
-LOCAL_DNS_ENABLED = false
-LOCAL_DNS_IP = "127.0.0.1"
+# ----------------------------------------------------------
