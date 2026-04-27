@@ -67,13 +67,8 @@ LISTEN_PORT = 18080
 # Personal note: keeping SOCKS5_AUTH = false is fine for single-user localhost
 # setups, but if you ever bind to 0.0.0.0 remember to flip this to true and
 # change the default credentials below!
+# Personal note: I set a reminder to rotate SOCKS5_PASS every few months —
+# easy to forget but worth doing if this ever faces a less-trusted network.
 SOCKS5_AUTH = false
 SOCKS5_USER = "master_dns_vpn"
-SOCKS5_PASS = "master_dns_vpn"
-
-# ------------------------------------------------------------------------------
-# 3) Local DNS Service
-# What this section does:
-# - Controls the optional built-in local DNS listener.
-# - Controls local DNS cache size, TTL, pending timeout, and fragment assembly.
-# ----------------------------------------------------------
+SOCKS5_PASS = "ma
